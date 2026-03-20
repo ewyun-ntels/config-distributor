@@ -165,6 +165,8 @@ func kindFromKey(key string) string {
 }
 
 func renderConfigMapValue(value []byte) string {
+	value = extractStoredData(value)
+
 	type configMapEnvelope struct {
 		Format string            `json:"format,omitempty"`
 		Data   map[string]string `json:"data,omitempty"`
@@ -184,6 +186,8 @@ func renderConfigMapValue(value []byte) string {
 }
 
 func renderSecretValue(value []byte) string {
+	value = extractStoredData(value)
+
 	type secretEnvelope struct {
 		Format     string            `json:"format,omitempty"`
 		StringData map[string]string `json:"stringData,omitempty"`
@@ -240,4 +244,16 @@ func renderBinaryMap(data map[string]string) string {
 		lines = append(lines, fmt.Sprintf("%s: %s", key, data[key]))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func extractStoredData(value []byte) []byte {
+	type storedValueEnvelope struct {
+		Data json.RawMessage `json:"data,omitempty"`
+	}
+
+	var env storedValueEnvelope
+	if err := json.Unmarshal(value, &env); err == nil && len(env.Data) > 0 {
+		return env.Data
+	}
+	return value
 }

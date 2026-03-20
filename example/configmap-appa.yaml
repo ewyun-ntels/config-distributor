@@ -9,5 +9,5 @@ data:
   config.json: |
     {
       "app": "appA",
-      "version": "5"
+      "version": "500"
     }

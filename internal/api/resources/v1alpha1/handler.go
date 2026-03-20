@@ -163,7 +163,7 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		return
 	}
 
-	k8sRev, err := h.applyToKube(req.Request.Context(), ns, kind, name, data)
+	storedValue, k8sRev, err := h.applyToKube(req.Request.Context(), ns, kind, name, data)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			writeError(resp, http.StatusNotFound, err)
@@ -173,7 +173,7 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		return
 	}
 
-	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), data)
+	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), []byte(storedValue))
 	if err != nil {
 		writeError(resp, http.StatusInternalServerError, err)
 		return
@@ -181,7 +181,7 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 	if h.cache != nil {
 		h.cache.Upsert(ns, kind, name, store.CachedValue{
 			Revision: rev,
-			Value:    string(data),
+			Value:    storedValue,
 		})
 	}
 
@@ -231,26 +231,26 @@ func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind 
 	resp.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) applyToKube(ctx context.Context, namespace, kind, name string, data []byte) (string, error) {
+func (h *Handler) applyToKube(ctx context.Context, namespace, kind, name string, data []byte) (string, string, error) {
 	if h.kube == nil {
-		return "", fmt.Errorf("kube client not configured")
+		return "", "", fmt.Errorf("kube client not configured")
 	}
 	value := string(data)
 	switch kind {
 	case "configmap":
 		cm, err := h.kube.UpsertConfigMap(ctx, namespace, name, value)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return cm.ResourceVersion, nil
+		return kube.ValueFromConfigMap(cm), cm.ResourceVersion, nil
 	case "secret":
 		sec, err := h.kube.UpsertSecret(ctx, namespace, name, value)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return sec.ResourceVersion, nil
+		return kube.ValueFromSecret(sec), sec.ResourceVersion, nil
 	default:
-		return "", fmt.Errorf("unsupported kind: %s", kind)
+		return "", "", fmt.Errorf("unsupported kind: %s", kind)
 	}
 }
 

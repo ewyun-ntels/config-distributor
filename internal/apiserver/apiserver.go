@@ -26,14 +26,12 @@ import (
 )
 
 const (
-	bucket     = "UPM_CONFIG"
-	metaBucket = "UPM_CONFIG_META"
+	bucket = "UPM_CONFIG"
 )
 
 type APIServer struct {
 	container *restful.Container
 	kv        nats.KeyValue
-	metaKV    nats.KeyValue
 	nc        *nats.Conn
 	kube      *kube.Client
 	cache     *store.ResourceCache
@@ -67,12 +65,11 @@ func New() (*APIServer, error) {
 		return nil, err
 	}
 
-	slog.Info("init distributor", "nats_url", natsURL, "bucket", bucket, "meta_bucket", metaBucket)
+	slog.Info("init distributor", "nats_url", natsURL, "bucket", bucket)
 
 	s := &APIServer{
 		container:       restful.NewContainer(),
 		kv:              kv,
-		metaKV:          nil,
 		nc:              nc,
 		kube:            kubeClient,
 		cache:           store.NewResourceCache(),
@@ -82,13 +79,6 @@ func New() (*APIServer, error) {
 		watchResources:  defaultWatchResources(),
 	}
 	s.setDependencyStatus("nats", nil, 1)
-
-	metaKV, err := ensureKV(js, metaBucket)
-	if err != nil {
-		s.setDependencyStatus("nats", nil, 0)
-		return nil, err
-	}
-	s.metaKV = metaKV
 
 	return s, nil
 }
@@ -218,9 +208,9 @@ func (s *APIServer) startResourceSync(ctx context.Context) error {
 
 func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion string) error {
 	if resourceVersion != "" {
-		entry, err := s.metaKV.Get(key)
+		entry, err := s.kv.Get(key)
 		if err == nil {
-			if string(entry.Value()) == resourceVersion {
+			if kube.ExtractResourceVersion(entry.Value()) == resourceVersion {
 				return nil
 			}
 		} else if err != nats.ErrKeyNotFound {
@@ -243,11 +233,6 @@ func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion s
 		return err
 	}
 	s.updateCacheForKey(key, rev, string(value))
-	if resourceVersion != "" {
-		if _, err := s.metaKV.Put(key, []byte(resourceVersion)); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -269,9 +254,6 @@ func (s *APIServer) deleteIfExists(key string) error {
 		return err
 	}
 	s.deleteCacheForKey(key)
-	if err := s.metaKV.Delete(key); err != nil && err != nats.ErrKeyNotFound {
-		return err
-	}
 	return nil
 }
 
@@ -296,6 +278,7 @@ func (s *APIServer) deleteCacheForKey(key string) {
 
 func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 	slog.Info("kube watch start")
+	
 	desiredKeys := make(map[string]struct{})
 	for _, ns := range s.watchNamespaces {
 		s.setDependencyStatus("kube_informer_synced", map[string]string{

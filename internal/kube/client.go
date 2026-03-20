@@ -28,6 +28,18 @@ type configMapEnvelope struct {
 	Data   map[string]string `json:"data,omitempty"`
 }
 
+type storedMetadata struct {
+	Name      string            `json:"name,omitempty"`
+	Namespace string            `json:"namespace,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+}
+
+type storedValueEnvelope struct {
+	Data            json.RawMessage `json:"data,omitempty"`
+	Metadata        *storedMetadata `json:"metadata,omitempty"`
+	ResourceVersion string          `json:"resourceVersion,omitempty"`
+}
+
 type secretEnvelope struct {
 	Format     string            `json:"format,omitempty"`
 	StringData map[string]string `json:"stringData,omitempty"`
@@ -209,31 +221,15 @@ func ValueFromConfigMap(cm *corev1.ConfigMap) string {
 	if cm == nil {
 		return ""
 	}
-	if len(cm.Data) == 1 {
-		if v, ok := cm.Data["value"]; ok {
-			return v
-		}
-	}
 	if len(cm.Data) == 0 {
 		return ""
 	}
-	if b, err := json.Marshal(configMapEnvelope{
-		Format: "configmap/v1",
-		Data:   cm.Data,
-	}); err == nil {
-		return string(b)
-	}
-	return ""
+	return wrapStoredValue(cm.ObjectMeta, cm.Data, cm.ResourceVersion)
 }
 
 func ValueFromSecret(sec *corev1.Secret) string {
 	if sec == nil {
 		return ""
-	}
-	if len(sec.Data) == 1 {
-		if v, ok := sec.Data["value"]; ok && utf8.Valid(v) {
-			return string(v)
-		}
 	}
 	if len(sec.Data) == 0 {
 		return ""
@@ -256,29 +252,30 @@ func ValueFromSecret(sec *corev1.Secret) string {
 	if len(env.BinaryData) == 0 {
 		env.BinaryData = nil
 	}
-	if b, err := json.Marshal(env); err == nil {
-		return string(b)
-	}
-	return ""
+	return wrapStoredValue(sec.ObjectMeta, env, sec.ResourceVersion)
 }
 
 func parseConfigMapValue(value string) (map[string]string, error) {
+	payload := extractStoredPayload([]byte(value))
+
 	var env configMapEnvelope
-	if err := json.Unmarshal([]byte(value), &env); err == nil && len(env.Data) > 0 {
+	if err := json.Unmarshal(payload, &env); err == nil && len(env.Data) > 0 {
 		return env.Data, nil
 	}
 
 	var legacy map[string]string
-	if err := json.Unmarshal([]byte(value), &legacy); err == nil && len(legacy) > 0 {
+	if err := json.Unmarshal(payload, &legacy); err == nil && len(legacy) > 0 {
 		return legacy, nil
 	}
 
-	return map[string]string{"value": value}, nil
+	return map[string]string{"value": string(payload)}, nil
 }
 
 func parseSecretValue(value string) (secretValues, error) {
+	payload := extractStoredPayload([]byte(value))
+
 	var env secretEnvelope
-	if err := json.Unmarshal([]byte(value), &env); err == nil && (len(env.StringData) > 0 || len(env.BinaryData) > 0) {
+	if err := json.Unmarshal(payload, &env); err == nil && (len(env.StringData) > 0 || len(env.BinaryData) > 0) {
 		data := make(map[string][]byte, len(env.StringData)+len(env.BinaryData))
 		for k, v := range env.StringData {
 			data[k] = []byte(v)
@@ -294,7 +291,7 @@ func parseSecretValue(value string) (secretValues, error) {
 	}
 
 	var legacy map[string]string
-	if err := json.Unmarshal([]byte(value), &legacy); err == nil && len(legacy) > 0 {
+	if err := json.Unmarshal(payload, &legacy); err == nil && len(legacy) > 0 {
 		data := make(map[string][]byte, len(legacy))
 		for k, v := range legacy {
 			data[k] = []byte(v)
@@ -303,8 +300,48 @@ func parseSecretValue(value string) (secretValues, error) {
 	}
 
 	return secretValues{
-		Data: map[string][]byte{"value": []byte(value)},
+		Data: map[string][]byte{"value": payload},
 	}, nil
+}
+
+func ExtractResourceVersion(value []byte) string {
+	var env storedValueEnvelope
+	if err := json.Unmarshal(value, &env); err == nil {
+		return env.ResourceVersion
+	}
+	return ""
+}
+
+func ExtractData(value []byte) []byte {
+	return extractStoredPayload(value)
+}
+
+func wrapStoredValue(meta metav1.ObjectMeta, payload any, resourceVersion string) string {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	value, err := json.Marshal(storedValueEnvelope{
+		Data: data,
+		Metadata: &storedMetadata{
+			Name:      meta.Name,
+			Namespace: meta.Namespace,
+			Labels:    meta.Labels,
+		},
+		ResourceVersion: resourceVersion,
+	})
+	if err != nil {
+		return ""
+	}
+	return string(value)
+}
+
+func extractStoredPayload(value []byte) []byte {
+	var env storedValueEnvelope
+	if err := json.Unmarshal(value, &env); err == nil && len(env.Data) > 0 {
+		return env.Data
+	}
+	return value
 }
 
 func getenv(key, def string) string {
