@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "distributor.fullname" . }}
+  labels:
+    {{- include "distributor.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "distributor.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "distributor.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "distributor.serviceAccountName" . }}
+      containers:
+        - name: distributor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: NATS_URL
+              value: "{{ .Values.env.NATS_URL }}"
+            - name: WATCH_NAMESPACES
+              value: "{{ .Values.env.WATCH_NAMESPACES }}"
+            - name: MANAGED_LABEL_KEY
+              value: "{{ .Values.env.MANAGED_LABEL_KEY }}"
+            - name: MANAGED_LABEL_VALUE
+              value: "{{ .Values.env.MANAGED_LABEL_VALUE }}"
+          readinessProbe:
+            httpGet:
+              path: /namespaces/{{ (splitList "," .Values.env.WATCH_NAMESPACES) | first }}/configmap
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /namespaces/{{ (splitList "," .Values.env.WATCH_NAMESPACES) | first }}/configmap
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

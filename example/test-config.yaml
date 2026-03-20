@@ -1,0 +1,6 @@
+app: appA
+version: 1
+env: dev
+features:
+  - fast-start
+  - telemetry

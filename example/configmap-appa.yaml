@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: appa
+  namespace: default
+  labels:
+    config.upm.io/managed: "true"
+data:
+  app: appA
+  version: "2"

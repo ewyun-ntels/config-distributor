@@ -1,0 +1,31 @@
+replicaCount: 1
+
+image:
+  repository: 192.168.61.145/ewy/cfg-distributor
+  tag: latest
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+  name: ""
+
+rbac:
+  create: true
+
+service:
+  type: ClusterIP
+  port: 8080
+
+env:
+  NATS_URL: nats://nats.upm-messaging.svc.cluster.local:4222
+  WATCH_NAMESPACES: cmp,default,kube-node-lease,kube-public,kube-system,upm-database,upm-loadbalancer,upm-loadbalancing,upm-logging,upm-messaging,upm-monitoring,upm-sftp
+  MANAGED_LABEL_KEY: config.upm.io/managed
+  MANAGED_LABEL_VALUE: "true"
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

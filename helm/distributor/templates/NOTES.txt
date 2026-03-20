@@ -1,0 +1,8 @@
+1. Check the service:
+   kubectl get svc -n {{ .Release.Namespace }} {{ include "distributor.fullname" . }}
+
+2. Example request:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "distributor.fullname" . }} 8080:{{ .Values.service.port }}
+   curl -X PUT http://localhost:8080/namespaces/default/configmap/appA \
+     -H 'Content-Type: text/plain' \
+     --data-binary $'app: appA\nversion: 1\n'
