@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"ntels.com/upm/cfg-distributor/pkg/apiserver"
+	"ntels.com/upm/cfg-distributor/internal/apiserver"
 )
 
 func main() {

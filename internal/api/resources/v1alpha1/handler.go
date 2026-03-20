@@ -10,8 +10,8 @@ import (
 	"github.com/nats-io/nats.go"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"ntels.com/upm/cfg-distributor/pkg/kube"
-	"ntels.com/upm/cfg-distributor/pkg/store"
+	"ntels.com/upm/cfg-distributor/internal/kube"
+	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
 type Handler struct {

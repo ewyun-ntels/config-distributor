@@ -4,8 +4,8 @@ import (
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
 
-	"ntels.com/upm/cfg-distributor/pkg/kube"
-	"ntels.com/upm/cfg-distributor/pkg/store"
+	"ntels.com/upm/cfg-distributor/internal/kube"
+	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
 // Register wires API routes for v1alpha1 resources.

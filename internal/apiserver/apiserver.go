@@ -18,11 +18,11 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 
-	"ntels.com/upm/cfg-distributor/pkg/api/resources/v1alpha1"
-	kvinformers "ntels.com/upm/cfg-distributor/pkg/informers"
-	"ntels.com/upm/cfg-distributor/pkg/kube"
-	"ntels.com/upm/cfg-distributor/pkg/metrics"
-	"ntels.com/upm/cfg-distributor/pkg/store"
+	"ntels.com/upm/cfg-distributor/internal/api/resources/v1alpha1"
+	kvinformers "ntels.com/upm/cfg-distributor/internal/informers"
+	"ntels.com/upm/cfg-distributor/internal/kube"
+	"ntels.com/upm/cfg-distributor/internal/metrics"
+	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
 const (
