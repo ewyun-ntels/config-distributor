@@ -5,6 +5,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"ntels.com/upm/cfg-distributor/pkg/kube"
+	"ntels.com/upm/cfg-distributor/pkg/store"
 )
 
 // Register wires API routes for v1alpha1 resources.
@@ -27,9 +28,9 @@ func Register(ws *restful.WebService, h *Handler) {
 }
 
 // AddToContainer registers v1alpha1 resources into the container.
-func AddToContainer(container *restful.Container, kv nats.KeyValue, kubeClient *kube.Client) error {
+func AddToContainer(container *restful.Container, kv nats.KeyValue, kubeClient *kube.Client, cache *store.ResourceCache) error {
 	ws := new(restful.WebService)
-	Register(ws, NewHandlerWithKube(kv, kubeClient))
+	Register(ws, NewHandlerWithDeps(kv, kubeClient, cache))
 	container.Add(ws)
 	return nil
 }

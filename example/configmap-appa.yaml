@@ -6,5 +6,8 @@ metadata:
   labels:
     config.upm.io/managed: "true"
 data:
-  app: appA
-  version: "2"
+  config.json: |
+    {
+      "app": "appA",
+      "version": "5"
+    }

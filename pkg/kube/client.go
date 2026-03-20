@@ -23,6 +23,21 @@ type Client struct {
 	cs kubernetes.Interface
 }
 
+type configMapEnvelope struct {
+	Format string            `json:"format,omitempty"`
+	Data   map[string]string `json:"data,omitempty"`
+}
+
+type secretEnvelope struct {
+	Format     string            `json:"format,omitempty"`
+	StringData map[string]string `json:"stringData,omitempty"`
+	BinaryData map[string]string `json:"binaryData,omitempty"`
+}
+
+type secretValues struct {
+	Data map[string][]byte
+}
+
 const (
 	defaultManagedLabelKey   = "config.upm.io/managed"
 	defaultManagedLabelValue = "true"
@@ -91,6 +106,11 @@ func (c *Client) ListSecrets(ctx context.Context, namespace string) ([]corev1.Se
 }
 
 func (c *Client) UpsertConfigMap(ctx context.Context, namespace, name, value string) (*corev1.ConfigMap, error) {
+	data, err := parseConfigMapValue(value)
+	if err != nil {
+		return nil, err
+	}
+
 	cm, err := c.cs.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		cm = &corev1.ConfigMap{
@@ -98,21 +118,25 @@ func (c *Client) UpsertConfigMap(ctx context.Context, namespace, name, value str
 				Name:      name,
 				Namespace: namespace,
 			},
-			Data: map[string]string{"value": value},
+			Data: data,
 		}
+		ensureManagedLabels(&cm.ObjectMeta)
 		return c.cs.CoreV1().ConfigMaps(namespace).Create(ctx, cm, metav1.CreateOptions{})
 	}
 	if err != nil {
 		return nil, err
 	}
-	if cm.Data == nil {
-		cm.Data = map[string]string{}
-	}
-	cm.Data["value"] = value
+	cm.Data = data
+	ensureManagedLabels(&cm.ObjectMeta)
 	return c.cs.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
 }
 
 func (c *Client) UpsertSecret(ctx context.Context, namespace, name, value string) (*corev1.Secret, error) {
+	values, err := parseSecretValue(value)
+	if err != nil {
+		return nil, err
+	}
+
 	sec, err := c.cs.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		sec = &corev1.Secret{
@@ -120,27 +144,38 @@ func (c *Client) UpsertSecret(ctx context.Context, namespace, name, value string
 				Name:      name,
 				Namespace: namespace,
 			},
-			StringData: map[string]string{"value": value},
-			Type:       corev1.SecretTypeOpaque,
+			Data: values.Data,
+			Type: corev1.SecretTypeOpaque,
 		}
+		ensureManagedLabels(&sec.ObjectMeta)
 		return c.cs.CoreV1().Secrets(namespace).Create(ctx, sec, metav1.CreateOptions{})
 	}
 	if err != nil {
 		return nil, err
 	}
-	if sec.StringData == nil {
-		sec.StringData = map[string]string{}
+	if sec.Type == "" {
+		sec.Type = corev1.SecretTypeOpaque
 	}
-	sec.StringData["value"] = value
+	sec.Data = values.Data
+	sec.StringData = nil
+	ensureManagedLabels(&sec.ObjectMeta)
 	return c.cs.CoreV1().Secrets(namespace).Update(ctx, sec, metav1.UpdateOptions{})
 }
 
 func (c *Client) DeleteConfigMap(ctx context.Context, namespace, name string) error {
-	return c.cs.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err := c.cs.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (c *Client) DeleteSecret(ctx context.Context, namespace, name string) error {
-	return c.cs.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	err := c.cs.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func IsManagedConfigMap(cm *corev1.ConfigMap) bool {
@@ -159,22 +194,34 @@ func IsManagedSecret(sec *corev1.Secret) bool {
 	return sec.Labels[key] == value
 }
 
+func ensureManagedLabels(meta *metav1.ObjectMeta) {
+	if meta == nil {
+		return
+	}
+	if meta.Labels == nil {
+		meta.Labels = map[string]string{}
+	}
+	key, value := managedLabel()
+	meta.Labels[key] = value
+}
+
 func ValueFromConfigMap(cm *corev1.ConfigMap) string {
 	if cm == nil {
 		return ""
 	}
-	if v, ok := cm.Data["value"]; ok {
-		return v
-	}
 	if len(cm.Data) == 1 {
-		for _, v := range cm.Data {
+		if v, ok := cm.Data["value"]; ok {
 			return v
 		}
 	}
-	if len(cm.Data) > 0 {
-		if b, err := json.Marshal(cm.Data); err == nil {
-			return string(b)
-		}
+	if len(cm.Data) == 0 {
+		return ""
+	}
+	if b, err := json.Marshal(configMapEnvelope{
+		Format: "configmap/v1",
+		Data:   cm.Data,
+	}); err == nil {
+		return string(b)
 	}
 	return ""
 }
@@ -183,34 +230,81 @@ func ValueFromSecret(sec *corev1.Secret) string {
 	if sec == nil {
 		return ""
 	}
-	if v, ok := sec.Data["value"]; ok {
-		if utf8.Valid(v) {
+	if len(sec.Data) == 1 {
+		if v, ok := sec.Data["value"]; ok && utf8.Valid(v) {
 			return string(v)
 		}
-		return base64.StdEncoding.EncodeToString(v)
 	}
-	if len(sec.Data) == 1 {
-		for _, v := range sec.Data {
-			if utf8.Valid(v) {
-				return string(v)
-			}
-			return base64.StdEncoding.EncodeToString(v)
+	if len(sec.Data) == 0 {
+		return ""
+	}
+	env := secretEnvelope{
+		Format:     "secret/v1",
+		StringData: map[string]string{},
+		BinaryData: map[string]string{},
+	}
+	for k, v := range sec.Data {
+		if utf8.Valid(v) {
+			env.StringData[k] = string(v)
+		} else {
+			env.BinaryData[k] = base64.StdEncoding.EncodeToString(v)
 		}
 	}
-	if len(sec.Data) > 0 {
-		m := make(map[string]string, len(sec.Data))
-		for k, v := range sec.Data {
-			if utf8.Valid(v) {
-				m[k] = string(v)
-			} else {
-				m[k] = base64.StdEncoding.EncodeToString(v)
-			}
-		}
-		if b, err := json.Marshal(m); err == nil {
-			return string(b)
-		}
+	if len(env.StringData) == 0 {
+		env.StringData = nil
+	}
+	if len(env.BinaryData) == 0 {
+		env.BinaryData = nil
+	}
+	if b, err := json.Marshal(env); err == nil {
+		return string(b)
 	}
 	return ""
+}
+
+func parseConfigMapValue(value string) (map[string]string, error) {
+	var env configMapEnvelope
+	if err := json.Unmarshal([]byte(value), &env); err == nil && len(env.Data) > 0 {
+		return env.Data, nil
+	}
+
+	var legacy map[string]string
+	if err := json.Unmarshal([]byte(value), &legacy); err == nil && len(legacy) > 0 {
+		return legacy, nil
+	}
+
+	return map[string]string{"value": value}, nil
+}
+
+func parseSecretValue(value string) (secretValues, error) {
+	var env secretEnvelope
+	if err := json.Unmarshal([]byte(value), &env); err == nil && (len(env.StringData) > 0 || len(env.BinaryData) > 0) {
+		data := make(map[string][]byte, len(env.StringData)+len(env.BinaryData))
+		for k, v := range env.StringData {
+			data[k] = []byte(v)
+		}
+		for k, v := range env.BinaryData {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return secretValues{}, fmt.Errorf("decode binary secret field %q: %w", k, err)
+			}
+			data[k] = decoded
+		}
+		return secretValues{Data: data}, nil
+	}
+
+	var legacy map[string]string
+	if err := json.Unmarshal([]byte(value), &legacy); err == nil && len(legacy) > 0 {
+		data := make(map[string][]byte, len(legacy))
+		for k, v := range legacy {
+			data[k] = []byte(v)
+		}
+		return secretValues{Data: data}, nil
+	}
+
+	return secretValues{
+		Data: map[string][]byte{"value": []byte(value)},
+	}, nil
 }
 
 func getenv(key, def string) string {

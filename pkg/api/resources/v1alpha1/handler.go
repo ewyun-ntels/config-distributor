@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
@@ -16,16 +15,21 @@ import (
 )
 
 type Handler struct {
-	kv   nats.KeyValue
-	kube *kube.Client
+	kv    nats.KeyValue
+	kube  *kube.Client
+	cache *store.ResourceCache
 }
 
 func NewHandler(kv nats.KeyValue) *Handler {
-	return NewHandlerWithKube(kv, nil)
+	return NewHandlerWithDeps(kv, nil, nil)
 }
 
 func NewHandlerWithKube(kv nats.KeyValue, kubeClient *kube.Client) *Handler {
-	return &Handler{kv: kv, kube: kubeClient}
+	return NewHandlerWithDeps(kv, kubeClient, nil)
+}
+
+func NewHandlerWithDeps(kv nats.KeyValue, kubeClient *kube.Client, cache *store.ResourceCache) *Handler {
+	return &Handler{kv: kv, kube: kubeClient, cache: cache}
 }
 
 func (h *Handler) listConfigMaps(req *restful.Request, resp *restful.Response) {
@@ -38,30 +42,41 @@ func (h *Handler) listSecrets(req *restful.Request, resp *restful.Response) {
 
 func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kind string) {
 	ns := req.PathParameter("namespace")
-	prefix := store.KeyPrefix(ns, kind)
-
-	keys, err := h.kv.Keys()
-	if err != nil {
-		writeError(resp, http.StatusInternalServerError, err)
-		return
-	}
 
 	items := make([]itemResponse, 0)
-	for _, k := range keys {
-		if !strings.HasPrefix(k, prefix) {
-			continue
+	if h.cache != nil {
+		for _, item := range h.cache.List(ns, kind) {
+			items = append(items, itemResponse{
+				Namespace: ns,
+				Kind:      kind,
+				Name:      item.Name,
+				Revision:  item.Revision,
+				Value:     item.Value,
+			})
 		}
-		entry, err := h.kv.Get(k)
+	} else {
+		prefix := store.KeyPrefix(ns, kind)
+		keys, err := h.kv.Keys()
 		if err != nil {
-			continue
+			writeError(resp, http.StatusInternalServerError, err)
+			return
 		}
-		items = append(items, itemResponse{
-			Namespace: ns,
-			Kind:      kind,
-			Name:      strings.TrimPrefix(k, prefix),
-			Revision:  entry.Revision(),
-			Value:     string(entry.Value()),
-		})
+		for _, k := range keys {
+			if len(k) < len(prefix) || k[:len(prefix)] != prefix {
+				continue
+			}
+			entry, err := h.kv.Get(k)
+			if err != nil {
+				continue
+			}
+			items = append(items, itemResponse{
+				Namespace: ns,
+				Kind:      kind,
+				Name:      k[len(prefix):],
+				Revision:  entry.Revision(),
+				Value:     string(entry.Value()),
+			})
+		}
 	}
 
 	resp.WriteHeaderAndEntity(http.StatusOK, listResponse{
@@ -85,6 +100,20 @@ func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind str
 	if name == "" {
 		writeError(resp, http.StatusBadRequest, fmt.Errorf("name is required"))
 		return
+	}
+
+	if h.cache != nil {
+		item, ok := h.cache.Get(ns, kind, name)
+		if ok {
+			resp.WriteHeaderAndEntity(http.StatusOK, itemResponse{
+				Namespace: ns,
+				Kind:      kind,
+				Name:      name,
+				Revision:  item.Revision,
+				Value:     item.Value,
+			})
+			return
+		}
 	}
 
 	entry, err := h.kv.Get(store.KeyFor(ns, kind, name))
@@ -149,6 +178,12 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
+	if h.cache != nil {
+		h.cache.Upsert(ns, kind, name, store.CachedValue{
+			Revision: rev,
+			Value:    string(data),
+		})
+	}
 
 	resp.WriteHeaderAndEntity(http.StatusOK, map[string]any{
 		"namespace":        ns,
@@ -179,21 +214,18 @@ func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind 
 	}
 
 	if err := h.deleteFromKube(req.Request.Context(), ns, kind, name); err != nil {
-		if apierrors.IsNotFound(err) {
-			writeError(resp, http.StatusNotFound, err)
-			return
-		}
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
 
 	if err := h.kv.Delete(store.KeyFor(ns, kind, name)); err != nil {
-		if err == nats.ErrKeyNotFound {
-			writeError(resp, http.StatusNotFound, err)
+		if err != nats.ErrKeyNotFound {
+			writeError(resp, http.StatusInternalServerError, err)
 			return
 		}
-		writeError(resp, http.StatusInternalServerError, err)
-		return
+	}
+	if h.cache != nil {
+		h.cache.Delete(ns, kind, name)
 	}
 
 	resp.WriteHeader(http.StatusNoContent)
