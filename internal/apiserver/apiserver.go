@@ -19,7 +19,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"ntels.com/upm/cfg-distributor/internal/api/resources/v1alpha1"
-	kvinformers "ntels.com/upm/cfg-distributor/internal/informers"
 	"ntels.com/upm/cfg-distributor/internal/kube"
 	"ntels.com/upm/cfg-distributor/internal/metrics"
 	"ntels.com/upm/cfg-distributor/internal/store"
@@ -40,7 +39,6 @@ type APIServer struct {
 	natsURL         string
 	watchNamespaces []string
 	watchResources  []ResourceGroup
-	kvInformers     []*kvinformers.KVInformer
 }
 
 func New() (*APIServer, error) {
@@ -142,68 +140,10 @@ func (s *APIServer) Run(ctx context.Context) error {
 	}
 }
 
-// startResourceSync starts KV watchers for resources declared in watchResources.
+// startResourceSync syncs Kubernetes state into KV during startup and
+// leaves ongoing reconciliation to Kubernetes informer events.
 func (s *APIServer) startResourceSync(ctx context.Context) error {
-	if err := s.startKubeWatchers(ctx); err != nil {
-		return err
-	}
-
-	for _, ns := range s.watchNamespaces {
-		for _, group := range s.watchResources {
-			for _, res := range group.Resources {
-				var inf *kvinformers.KVInformer
-				switch res {
-				case "configmaps":
-					inf = kvinformers.NewConfigMapInformer(s.kv, ns)
-				case "secrets":
-					inf = kvinformers.NewSecretInformer(s.kv, ns)
-				default:
-					continue
-				}
-				if err := inf.Start(ctx); err != nil {
-					s.setDependencyStatus("kv_watcher", map[string]string{
-						"namespace": namespaceOrEmpty(ns),
-						"resource":  strings.TrimSuffix(res, "s"),
-					}, 0)
-					return err
-				}
-				s.setDependencyStatus("kv_watcher", map[string]string{
-					"namespace": namespaceOrEmpty(ns),
-					"resource":  strings.TrimSuffix(res, "s"),
-				}, 1)
-				s.kvInformers = append(s.kvInformers, inf)
-
-				// Minimal event loop (log only). Extend as needed.
-				go func(informer *kvinformers.KVInformer, namespace, resource string) {
-					defer s.setDependencyStatus("kv_watcher", map[string]string{
-						"namespace": namespaceOrEmpty(namespace),
-						"resource":  strings.TrimSuffix(resource, "s"),
-					}, 0)
-					for evt := range informer.Events() {
-						switch evt.Type {
-						case kvinformers.EventDelete, kvinformers.EventPurge:
-							s.cache.Delete(namespace, strings.TrimSuffix(resource, "s"), evt.Name)
-						default:
-							s.cache.Upsert(namespace, strings.TrimSuffix(resource, "s"), evt.Name, store.CachedValue{
-								Revision: evt.Revision,
-								Value:    string(evt.Value),
-							})
-						}
-						slog.Info("kv watch event",
-							"namespace", namespace,
-							"resource", resource,
-							"type", evt.Type,
-							"name", evt.Name,
-							"rev", evt.Revision,
-							"op", evt.Op,
-							"value_len", len(evt.Value),
-						)
-					}
-				}(inf, ns, res)
-			}
-		}
-	}
-	return nil
+	return s.startKubeWatchers(ctx)
 }
 
 func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion string) error {
@@ -278,8 +218,9 @@ func (s *APIServer) deleteCacheForKey(key string) {
 
 func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 	slog.Info("kube watch start")
-	
+
 	desiredKeys := make(map[string]struct{})
+
 	for _, ns := range s.watchNamespaces {
 		s.setDependencyStatus("kube_informer_synced", map[string]string{
 			"namespace": namespaceOrEmpty(ns),
@@ -323,6 +264,7 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 		})
 
 		factory.Start(ctx.Done())
+
 		if ok := cache.WaitForCacheSync(ctx.Done(), cmInf.HasSynced, secInf.HasSynced); !ok {
 			s.setDependencyStatus("kube_informer_synced", map[string]string{
 				"namespace": namespaceOrEmpty(ns),
@@ -334,6 +276,7 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 			}, 0)
 			return fmt.Errorf("kube watch sync failed: namespace=%s", ns)
 		}
+
 		s.setDependencyStatus("kube_informer_synced", map[string]string{
 			"namespace": namespaceOrEmpty(ns),
 			"resource":  "configmap",
@@ -348,6 +291,7 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 		}
 		slog.Info("kube watch ready", "namespace", ns)
 	}
+
 	if err := s.deleteStaleKVKeys(desiredKeys); err != nil {
 		return err
 	}

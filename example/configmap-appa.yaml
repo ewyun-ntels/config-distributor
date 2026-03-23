@@ -8,6 +8,5 @@ metadata:
 data:
   config.json: |
     {
-      "app": "appA",
-      "version": "500"
+      "app": "appA"
     }
