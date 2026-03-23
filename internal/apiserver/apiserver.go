@@ -150,6 +150,8 @@ func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion s
 	if resourceVersion != "" {
 		entry, err := s.kv.Get(key)
 		if err == nil {
+			// API writes may already have stored the same Kubernetes state in KV.
+			// Skip the informer-driven write when the observed resourceVersion is unchanged.
 			if kube.ExtractResourceVersion(entry.Value()) == resourceVersion {
 				return nil
 			}

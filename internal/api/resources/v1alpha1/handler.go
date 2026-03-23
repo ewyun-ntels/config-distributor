@@ -36,39 +36,14 @@ func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kin
 	ns := req.PathParameter("namespace")
 
 	items := make([]itemResponse, 0)
-	if h.cache != nil {
-		for _, item := range h.cache.List(ns, kind) {
-			items = append(items, itemResponse{
-				Namespace: ns,
-				Kind:      kind,
-				Name:      item.Name,
-				Revision:  item.Revision,
-				Value:     item.Value,
-			})
-		}
-	} else {
-		prefix := store.KeyPrefix(ns, kind)
-		keys, err := h.kv.Keys()
-		if err != nil {
-			writeError(resp, http.StatusInternalServerError, err)
-			return
-		}
-		for _, k := range keys {
-			if len(k) < len(prefix) || k[:len(prefix)] != prefix {
-				continue
-			}
-			entry, err := h.kv.Get(k)
-			if err != nil {
-				continue
-			}
-			items = append(items, itemResponse{
-				Namespace: ns,
-				Kind:      kind,
-				Name:      k[len(prefix):],
-				Revision:  entry.Revision(),
-				Value:     string(entry.Value()),
-			})
-		}
+	for _, item := range h.cache.List(ns, kind) {
+		items = append(items, itemResponse{
+			Namespace: ns,
+			Kind:      kind,
+			Name:      item.Name,
+			Revision:  item.Revision,
+			Value:     item.Value,
+		})
 	}
 
 	resp.WriteHeaderAndEntity(http.StatusOK, listResponse{
@@ -94,18 +69,16 @@ func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind str
 		return
 	}
 
-	if h.cache != nil {
-		item, ok := h.cache.Get(ns, kind, name)
-		if ok {
-			resp.WriteHeaderAndEntity(http.StatusOK, itemResponse{
-				Namespace: ns,
-				Kind:      kind,
-				Name:      name,
-				Revision:  item.Revision,
-				Value:     item.Value,
-			})
-			return
-		}
+	item, ok := h.cache.Get(ns, kind, name)
+	if ok {
+		resp.WriteHeaderAndEntity(http.StatusOK, itemResponse{
+			Namespace: ns,
+			Kind:      kind,
+			Name:      name,
+			Revision:  item.Revision,
+			Value:     item.Value,
+		})
+		return
 	}
 
 	entry, err := h.kv.Get(store.KeyFor(ns, kind, name))
@@ -165,17 +138,18 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		return
 	}
 
+	// Update KV/cache in the request path so the API can return the KV revision
+	// immediately and subsequent reads in this process observe the new value
+	// without waiting for the asynchronous informer event.
 	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), []byte(storedValue))
 	if err != nil {
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
-	if h.cache != nil {
-		h.cache.Upsert(ns, kind, name, store.CachedValue{
-			Revision: rev,
-			Value:    storedValue,
-		})
-	}
+	h.cache.Upsert(ns, kind, name, store.CachedValue{
+		Revision: rev,
+		Value:    storedValue,
+	})
 
 	resp.WriteHeaderAndEntity(http.StatusOK, map[string]any{
 		"namespace":        ns,
@@ -216,9 +190,7 @@ func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind 
 			return
 		}
 	}
-	if h.cache != nil {
-		h.cache.Delete(ns, kind, name)
-	}
+	h.cache.Delete(ns, kind, name)
 
 	resp.WriteHeader(http.StatusNoContent)
 }
