@@ -20,14 +20,6 @@ type Handler struct {
 	cache *store.ResourceCache
 }
 
-func NewHandler(kv nats.KeyValue) *Handler {
-	return NewHandlerWithDeps(kv, nil, nil)
-}
-
-func NewHandlerWithKube(kv nats.KeyValue, kubeClient *kube.Client) *Handler {
-	return NewHandlerWithDeps(kv, kubeClient, nil)
-}
-
 func NewHandlerWithDeps(kv nats.KeyValue, kubeClient *kube.Client, cache *store.ResourceCache) *Handler {
 	return &Handler{kv: kv, kube: kubeClient, cache: cache}
 }
