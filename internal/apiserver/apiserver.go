@@ -324,6 +324,9 @@ func (s *APIServer) reconcileNamespaceFromStore(
 
 func (s *APIServer) deleteStaleKVKeys(desiredKeys map[string]struct{}) error {
 	keys, err := s.kv.Keys()
+	if err == nats.ErrNoKeysFound {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
