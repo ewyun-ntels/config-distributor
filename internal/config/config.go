@@ -112,30 +112,12 @@ func setDefaults(cfg *Config) {
 	}
 }
 
-// Validate checks the configuration for invalid or missing values.
-// Called after setDefaults, so only checks values that must be explicitly provided
-// or values that could be set to invalid ranges.
+// Validate checks the configuration for invalid values.
+// Called after setDefaults, so string fields are already non-empty.
+// Only port range requires explicit validation since it can be set to an invalid value.
 func (cfg *Config) Validate() error {
-	var errs []string
-
 	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
-		errs = append(errs, fmt.Sprintf("server.port: invalid port %d (must be 1-65535)", cfg.Server.Port))
-	}
-	if strings.TrimSpace(cfg.NATS.URL) == "" {
-		errs = append(errs, "nats.url is required")
-	}
-	if strings.TrimSpace(cfg.NATS.Bucket) == "" {
-		errs = append(errs, "nats.bucket is required")
-	}
-	if strings.TrimSpace(cfg.Filter.ManagedLabel.Key) == "" {
-		errs = append(errs, "filter.managedLabel.key is required")
-	}
-	if strings.TrimSpace(cfg.Filter.ManagedLabel.Value) == "" {
-		errs = append(errs, "filter.managedLabel.value is required")
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("%s", strings.Join(errs, "; "))
+		return fmt.Errorf("server.port: invalid port %d (must be 1-65535)", cfg.Server.Port)
 	}
 	return nil
 }

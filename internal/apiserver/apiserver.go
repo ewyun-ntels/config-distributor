@@ -34,7 +34,7 @@ type APIServer struct {
 
 	port            int
 	watchNamespaces []string
-	watchResources  []ResourceGroup
+	watchResources  []string // singular forms: "configmap", "secret"
 }
 
 func New(cfg *config.Config) (*APIServer, error) {
@@ -110,7 +110,7 @@ func (s *APIServer) Run(ctx context.Context) error {
 		return err
 	}
 	slog.Info("start distributor", "namespaces", s.watchNamespaces, "resources", s.watchResources)
-	if err := s.startResourceSync(ctx); err != nil {
+	if err := s.startKubeWatchers(ctx); err != nil {
 		return err
 	}
 
@@ -118,8 +118,12 @@ func (s *APIServer) Run(ctx context.Context) error {
 	slog.Info("distributor api listening", "addr", addr)
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: s.container,
+		Addr:              addr,
+		Handler:           s.container,
+		ReadHeaderTimeout: 30 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
@@ -137,12 +141,6 @@ func (s *APIServer) Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
-}
-
-// startResourceSync syncs Kubernetes state into KV during startup and
-// leaves ongoing reconciliation to Kubernetes informer events.
-func (s *APIServer) startResourceSync(ctx context.Context) error {
-	return s.startKubeWatchers(ctx)
 }
 
 func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion string) error {
@@ -178,17 +176,13 @@ func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion s
 }
 
 func (s *APIServer) deleteIfExists(key string) error {
-	entry, err := s.kv.Get(key)
+	_, err := s.kv.Get(key)
 	if err == nats.ErrKeyNotFound {
 		s.deleteCacheForKey(key)
 		return nil
 	}
 	if err != nil {
 		return err
-	}
-	if entry == nil {
-		s.deleteCacheForKey(key)
-		return nil
 	}
 
 	if err := s.kv.Delete(key); err != nil && err != nats.ErrKeyNotFound {
@@ -220,6 +214,9 @@ func (s *APIServer) deleteCacheForKey(key string) {
 func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 	slog.Info("kube watch start")
 
+	watchCM := containsString(s.watchResources, "configmap")
+	watchSec := containsString(s.watchResources, "secret")
+
 	desiredKeys := make(map[string]struct{})
 
 	for _, ns := range s.watchNamespaces {
@@ -229,36 +226,44 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 			informers.WithNamespace(ns),
 		)
 
-		cmInf := factory.Core().V1().ConfigMaps().Informer()
-		secInf := factory.Core().V1().Secrets().Informer()
+		var syncChecks []cache.InformerSynced
+		var cmInf, secInf cache.SharedIndexInformer
 
-		cmInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				s.handleConfigMapUpsert("add", obj)
-			},
-			UpdateFunc: func(_, newObj interface{}) {
-				s.handleConfigMapUpsert("update", newObj)
-			},
-			DeleteFunc: func(obj interface{}) {
-				s.handleConfigMapDelete(obj)
-			},
-		})
+		if watchCM {
+			cmInf = factory.Core().V1().ConfigMaps().Informer()
+			cmInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+				AddFunc: func(obj interface{}) {
+					s.handleConfigMapUpsert("add", obj)
+				},
+				UpdateFunc: func(_, newObj interface{}) {
+					s.handleConfigMapUpsert("update", newObj)
+				},
+				DeleteFunc: func(obj interface{}) {
+					s.handleConfigMapDelete(obj)
+				},
+			})
+			syncChecks = append(syncChecks, cmInf.HasSynced)
+		}
 
-		secInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
-				s.handleSecretUpsert("add", obj)
-			},
-			UpdateFunc: func(_, newObj interface{}) {
-				s.handleSecretUpsert("update", newObj)
-			},
-			DeleteFunc: func(obj interface{}) {
-				s.handleSecretDelete(obj)
-			},
-		})
+		if watchSec {
+			secInf = factory.Core().V1().Secrets().Informer()
+			secInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+				AddFunc: func(obj interface{}) {
+					s.handleSecretUpsert("add", obj)
+				},
+				UpdateFunc: func(_, newObj interface{}) {
+					s.handleSecretUpsert("update", newObj)
+				},
+				DeleteFunc: func(obj interface{}) {
+					s.handleSecretDelete(obj)
+				},
+			})
+			syncChecks = append(syncChecks, secInf.HasSynced)
+		}
 
 		factory.Start(ctx.Done())
 
-		if ok := cache.WaitForCacheSync(ctx.Done(), cmInf.HasSynced, secInf.HasSynced); !ok {
+		if ok := cache.WaitForCacheSync(ctx.Done(), syncChecks...); !ok {
 			return fmt.Errorf("kube watch sync failed: namespace=%s", ns)
 		}
 
@@ -282,41 +287,51 @@ func (s *APIServer) reconcileNamespaceFromStore(
 ) error {
 	slog.Info("startup reconcile begin", "namespace", namespace)
 
-	for _, obj := range cmInf.GetStore().List() {
-		cm, ok := obj.(*corev1.ConfigMap)
-		if !ok || cm == nil {
-			continue
-		}
-		key := store.KeyFor(namespace, "configmap", cm.Name)
-		if !s.kube.IsManagedConfigMap(cm) {
-			continue
-		}
-		value := kube.ValueFromConfigMap(cm)
-		if value == "" {
-			continue
-		}
-		desiredKeys[key] = struct{}{}
-		if err := s.putIfChangedByRV(key, []byte(value), cm.ResourceVersion); err != nil {
-			return err
+	if cmInf != nil {
+		for _, obj := range cmInf.GetStore().List() {
+			cm, ok := obj.(*corev1.ConfigMap)
+			if !ok || cm == nil {
+				continue
+			}
+			key := store.KeyFor(namespace, "configmap", cm.Name)
+			if !s.kube.IsManagedConfigMap(cm) {
+				continue
+			}
+			value, err := kube.ValueFromConfigMap(cm)
+			if err != nil {
+				return err
+			}
+			if value == "" {
+				continue
+			}
+			desiredKeys[key] = struct{}{}
+			if err := s.putIfChangedByRV(key, []byte(value), cm.ResourceVersion); err != nil {
+				return err
+			}
 		}
 	}
 
-	for _, obj := range secInf.GetStore().List() {
-		sec, ok := obj.(*corev1.Secret)
-		if !ok || sec == nil {
-			continue
-		}
-		key := store.KeyFor(namespace, "secret", sec.Name)
-		if !s.kube.IsManagedSecret(sec) {
-			continue
-		}
-		value := kube.ValueFromSecret(sec)
-		if value == "" {
-			continue
-		}
-		desiredKeys[key] = struct{}{}
-		if err := s.putIfChangedByRV(key, []byte(value), sec.ResourceVersion); err != nil {
-			return err
+	if secInf != nil {
+		for _, obj := range secInf.GetStore().List() {
+			sec, ok := obj.(*corev1.Secret)
+			if !ok || sec == nil {
+				continue
+			}
+			key := store.KeyFor(namespace, "secret", sec.Name)
+			if !s.kube.IsManagedSecret(sec) {
+				continue
+			}
+			value, err := kube.ValueFromSecret(sec)
+			if err != nil {
+				return err
+			}
+			if value == "" {
+				continue
+			}
+			desiredKeys[key] = struct{}{}
+			if err := s.putIfChangedByRV(key, []byte(value), sec.ResourceVersion); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -362,14 +377,7 @@ func (s *APIServer) isWatchedKey(key string) bool {
 	if !containsString(s.watchNamespaces, namespace) {
 		return false
 	}
-	for _, group := range s.watchResources {
-		for _, resource := range group.Resources {
-			if strings.TrimSuffix(resource, "s") == kind {
-				return true
-			}
-		}
-	}
-	return false
+	return containsString(s.watchResources, kind)
 }
 
 func containsString(items []string, target string) bool {
@@ -403,7 +411,13 @@ func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 		return
 	}
 
-	value := kube.ValueFromConfigMap(cm)
+	value, err := kube.ValueFromConfigMap(cm)
+	if err != nil {
+		s.recordKVOperation("put", "error")
+		s.recordKubeEvent("configmap", action, "error")
+		slog.Error("kube configmap marshal failed", "action", action, "key", key, "err", err)
+		return
+	}
 	if value == "" {
 		slog.Info("kube configmap empty value, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
@@ -474,7 +488,13 @@ func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 		return
 	}
 
-	value := kube.ValueFromSecret(sec)
+	value, err := kube.ValueFromSecret(sec)
+	if err != nil {
+		s.recordKVOperation("put", "error")
+		s.recordKubeEvent("secret", action, "error")
+		slog.Error("kube secret marshal failed", "action", action, "key", key, "err", err)
+		return
+	}
 	if value == "" {
 		slog.Info("kube secret empty value, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
@@ -570,31 +590,33 @@ func extractSecret(obj interface{}) *corev1.Secret {
 	return nil
 }
 
-type ResourceGroup struct {
-	Group     string
-	Version   string
-	Resources []string
-}
-
-func watchResourcesFromConfig(resources []string) []ResourceGroup {
-	normalized := make([]string, 0, len(resources))
-	for _, resource := range resources {
-		value := strings.TrimSpace(resource)
-		if value == "" {
+// watchResourcesFromConfig normalizes plural resource names from config (e.g. "configmaps")
+// to the singular forms used as KV key components (e.g. "configmap").
+func watchResourcesFromConfig(resources []string) []string {
+	singularOf := map[string]string{
+		"configmaps": "configmap",
+		"secrets":    "secret",
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0, len(resources))
+	for _, r := range resources {
+		r = strings.TrimSpace(r)
+		if r == "" {
 			continue
 		}
-		normalized = append(normalized, value)
+		singular, ok := singularOf[r]
+		if !ok {
+			singular = strings.TrimSuffix(r, "s")
+		}
+		if _, dup := seen[singular]; !dup {
+			out = append(out, singular)
+			seen[singular] = struct{}{}
+		}
 	}
-	if len(normalized) == 0 {
-		normalized = []string{"configmaps", "secrets"}
+	if len(out) == 0 {
+		return []string{"configmap", "secret"}
 	}
-	return []ResourceGroup{
-		{
-			Group:     "",
-			Version:   "v1",
-			Resources: normalized,
-		},
-	}
+	return out
 }
 
 func normalizeNamespaces(namespaces []string) []string {

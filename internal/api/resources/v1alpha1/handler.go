@@ -152,14 +152,11 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 	})
 
 	resp.WriteHeaderAndEntity(http.StatusOK, map[string]any{
-		"namespace":        ns,
-		"kind":             kind,
-		"name":             name,
-		"revision":         rev,
-		"k8sResourceVer":   k8sRev,
-		"k8sResourceKind":  kind,
-		"k8sResourceName":  name,
-		"k8sResourceScope": "namespaced",
+		"namespace":      ns,
+		"kind":           kind,
+		"name":           name,
+		"revision":       rev,
+		"k8sResourceVer": k8sRev,
 	})
 }
 
@@ -206,13 +203,21 @@ func (h *Handler) applyToKube(ctx context.Context, namespace, kind, name string,
 		if err != nil {
 			return "", "", err
 		}
-		return kube.ValueFromConfigMap(cm), cm.ResourceVersion, nil
+		storedValue, err := kube.ValueFromConfigMap(cm)
+		if err != nil {
+			return "", "", err
+		}
+		return storedValue, cm.ResourceVersion, nil
 	case "secret":
 		sec, err := h.kube.UpsertSecret(ctx, namespace, name, value)
 		if err != nil {
 			return "", "", err
 		}
-		return kube.ValueFromSecret(sec), sec.ResourceVersion, nil
+		storedValue, err := kube.ValueFromSecret(sec)
+		if err != nil {
+			return "", "", err
+		}
+		return storedValue, sec.ResourceVersion, nil
 	default:
 		return "", "", fmt.Errorf("unsupported kind: %s", kind)
 	}

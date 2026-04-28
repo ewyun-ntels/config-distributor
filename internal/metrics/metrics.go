@@ -3,7 +3,6 @@ package metrics
 import (
 	"net/http"
 	"slices"
-	"sort"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -78,7 +77,7 @@ func orderedLabels(labels map[string]string) ([]string, []string) {
 	for name := range labels {
 		labelNames = append(labelNames, name)
 	}
-	sort.Strings(labelNames)
+	slices.Sort(labelNames)
 
 	labelValues := make([]string, 0, len(labelNames))
 	for _, name := range labelNames {

@@ -87,22 +87,6 @@ func loadConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", filepath.Join(home, ".kube", "config"))
 }
 
-func (c *Client) ListConfigMaps(ctx context.Context, namespace string) ([]corev1.ConfigMap, error) {
-	list, err := c.cs.CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return list.Items, nil
-}
-
-func (c *Client) ListSecrets(ctx context.Context, namespace string) ([]corev1.Secret, error) {
-	list, err := c.cs.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, err
-	}
-	return list.Items, nil
-}
-
 func (c *Client) UpsertConfigMap(ctx context.Context, namespace, name, value string) (*corev1.ConfigMap, error) {
 	data, err := parseConfigMapValue(value)
 	if err != nil {
@@ -200,22 +184,16 @@ func (c *Client) ensureManagedLabels(meta *metav1.ObjectMeta) {
 	meta.Labels[c.managedLabel.Key] = c.managedLabel.Value
 }
 
-func ValueFromConfigMap(cm *corev1.ConfigMap) string {
-	if cm == nil {
-		return ""
-	}
-	if len(cm.Data) == 0 {
-		return ""
+func ValueFromConfigMap(cm *corev1.ConfigMap) (string, error) {
+	if cm == nil || len(cm.Data) == 0 {
+		return "", nil
 	}
 	return wrapStoredValue(cm.ObjectMeta, cm.Data, cm.ResourceVersion)
 }
 
-func ValueFromSecret(sec *corev1.Secret) string {
-	if sec == nil {
-		return ""
-	}
-	if len(sec.Data) == 0 {
-		return ""
+func ValueFromSecret(sec *corev1.Secret) (string, error) {
+	if sec == nil || len(sec.Data) == 0 {
+		return "", nil
 	}
 	env := secretEnvelope{
 		Format:     "secret/v1",
@@ -295,14 +273,10 @@ func ExtractResourceVersion(value []byte) string {
 	return ""
 }
 
-func ExtractData(value []byte) []byte {
-	return extractStoredPayload(value)
-}
-
-func wrapStoredValue(meta metav1.ObjectMeta, payload any, resourceVersion string) string {
+func wrapStoredValue(meta metav1.ObjectMeta, payload any, resourceVersion string) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	value, err := json.Marshal(storedValueEnvelope{
 		Data: data,
@@ -314,9 +288,9 @@ func wrapStoredValue(meta metav1.ObjectMeta, payload any, resourceVersion string
 		ResourceVersion: resourceVersion,
 	})
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return string(value)
+	return string(value), nil
 }
 
 func extractStoredPayload(value []byte) []byte {
