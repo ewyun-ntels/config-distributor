@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,7 +19,8 @@ import (
 )
 
 type Client struct {
-	cs kubernetes.Interface
+	cs           kubernetes.Interface
+	managedLabel ManagedLabel
 }
 
 type configMapEnvelope struct {
@@ -50,26 +50,12 @@ type secretValues struct {
 	Data map[string][]byte
 }
 
-const (
-	defaultManagedLabelKey   = "config.upm.io/managed"
-	defaultManagedLabelValue = "true"
-)
-
-var (
-	managedLabelKey   string
-	managedLabelValue string
-	managedLabelOnce  sync.Once
-)
-
-func managedLabel() (string, string) {
-	managedLabelOnce.Do(func() {
-		managedLabelKey = getenv("MANAGED_LABEL_KEY", defaultManagedLabelKey)
-		managedLabelValue = getenv("MANAGED_LABEL_VALUE", defaultManagedLabelValue)
-	})
-	return managedLabelKey, managedLabelValue
+type ManagedLabel struct {
+	Key   string
+	Value string
 }
 
-func NewClient() (*Client, error) {
+func NewClient(managedLabel ManagedLabel) (*Client, error) {
 	cfg, err := loadConfig()
 	if err != nil {
 		return nil, err
@@ -78,7 +64,7 @@ func NewClient() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{cs: cs}, nil
+	return &Client{cs: cs, managedLabel: managedLabel}, nil
 }
 
 func (c *Client) ClientSet() kubernetes.Interface {
@@ -132,14 +118,14 @@ func (c *Client) UpsertConfigMap(ctx context.Context, namespace, name, value str
 			},
 			Data: data,
 		}
-		ensureManagedLabels(&cm.ObjectMeta)
+		c.ensureManagedLabels(&cm.ObjectMeta)
 		return c.cs.CoreV1().ConfigMaps(namespace).Create(ctx, cm, metav1.CreateOptions{})
 	}
 	if err != nil {
 		return nil, err
 	}
 	cm.Data = data
-	ensureManagedLabels(&cm.ObjectMeta)
+	c.ensureManagedLabels(&cm.ObjectMeta)
 	return c.cs.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
 }
 
@@ -159,7 +145,7 @@ func (c *Client) UpsertSecret(ctx context.Context, namespace, name, value string
 			Data: values.Data,
 			Type: corev1.SecretTypeOpaque,
 		}
-		ensureManagedLabels(&sec.ObjectMeta)
+		c.ensureManagedLabels(&sec.ObjectMeta)
 		return c.cs.CoreV1().Secrets(namespace).Create(ctx, sec, metav1.CreateOptions{})
 	}
 	if err != nil {
@@ -170,7 +156,7 @@ func (c *Client) UpsertSecret(ctx context.Context, namespace, name, value string
 	}
 	sec.Data = values.Data
 	sec.StringData = nil
-	ensureManagedLabels(&sec.ObjectMeta)
+	c.ensureManagedLabels(&sec.ObjectMeta)
 	return c.cs.CoreV1().Secrets(namespace).Update(ctx, sec, metav1.UpdateOptions{})
 }
 
@@ -190,31 +176,28 @@ func (c *Client) DeleteSecret(ctx context.Context, namespace, name string) error
 	return err
 }
 
-func IsManagedConfigMap(cm *corev1.ConfigMap) bool {
+func (c *Client) IsManagedConfigMap(cm *corev1.ConfigMap) bool {
 	if cm == nil || cm.Labels == nil {
 		return false
 	}
-	key, value := managedLabel()
-	return cm.Labels[key] == value
+	return cm.Labels[c.managedLabel.Key] == c.managedLabel.Value
 }
 
-func IsManagedSecret(sec *corev1.Secret) bool {
+func (c *Client) IsManagedSecret(sec *corev1.Secret) bool {
 	if sec == nil || sec.Labels == nil {
 		return false
 	}
-	key, value := managedLabel()
-	return sec.Labels[key] == value
+	return sec.Labels[c.managedLabel.Key] == c.managedLabel.Value
 }
 
-func ensureManagedLabels(meta *metav1.ObjectMeta) {
+func (c *Client) ensureManagedLabels(meta *metav1.ObjectMeta) {
 	if meta == nil {
 		return
 	}
 	if meta.Labels == nil {
 		meta.Labels = map[string]string{}
 	}
-	key, value := managedLabel()
-	meta.Labels[key] = value
+	meta.Labels[c.managedLabel.Key] = c.managedLabel.Value
 }
 
 func ValueFromConfigMap(cm *corev1.ConfigMap) string {
@@ -342,12 +325,4 @@ func extractStoredPayload(value []byte) []byte {
 		return env.Data
 	}
 	return value
-}
-
-func getenv(key, def string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	return v
 }

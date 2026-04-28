@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -19,13 +18,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"ntels.com/upm/cfg-distributor/internal/api/resources/v1alpha1"
+	"ntels.com/upm/cfg-distributor/internal/config"
 	"ntels.com/upm/cfg-distributor/internal/kube"
 	"ntels.com/upm/cfg-distributor/internal/metrics"
 	"ntels.com/upm/cfg-distributor/internal/store"
-)
-
-const (
-	bucket = "UPM_CONFIG"
 )
 
 type APIServer struct {
@@ -36,13 +32,13 @@ type APIServer struct {
 	cache     *store.ResourceCache
 	metrics   *metrics.Registry
 
-	natsURL         string
+	port            int
 	watchNamespaces []string
 	watchResources  []ResourceGroup
 }
 
-func New() (*APIServer, error) {
-	natsURL := getenv("NATS_URL", nats.DefaultURL)
+func New(cfg *config.Config) (*APIServer, error) {
+	natsURL := cfg.NATS.URL
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
 		return nil, err
@@ -53,17 +49,20 @@ func New() (*APIServer, error) {
 		return nil, err
 	}
 
-	kv, err := ensureKV(js, bucket)
+	kv, err := ensureKV(js, cfg.NATS.Bucket)
 	if err != nil {
 		return nil, err
 	}
 
-	kubeClient, err := kube.NewClient()
+	kubeClient, err := kube.NewClient(kube.ManagedLabel{
+		Key:   cfg.Filter.ManagedLabel.Key,
+		Value: cfg.Filter.ManagedLabel.Value,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	slog.Info("init distributor", "nats_url", natsURL, "bucket", bucket)
+	slog.Info("init distributor", "nats_url", natsURL, "bucket", cfg.NATS.Bucket)
 
 	s := &APIServer{
 		container:       restful.NewContainer(),
@@ -72,12 +71,10 @@ func New() (*APIServer, error) {
 		kube:            kubeClient,
 		cache:           store.NewResourceCache(),
 		metrics:         metrics.NewRegistry(),
-		natsURL:         natsURL,
-		watchNamespaces: parseNamespaces(getenv("WATCH_NAMESPACES", "default")),
-		watchResources:  defaultWatchResources(),
+		port:            cfg.Server.Port,
+		watchNamespaces: normalizeNamespaces(cfg.Watch.Namespaces),
+		watchResources:  watchResourcesFromConfig(cfg.Watch.Resources),
 	}
-	s.setDependencyStatus("nats", nil, 1)
-
 	return s, nil
 }
 
@@ -95,9 +92,11 @@ func (s *APIServer) installAPIs() {
 func (s *APIServer) installHealthz() {
 	ws := new(restful.WebService)
 	ws.Path("")
-	ws.Route(ws.GET("/healthz").To(func(_ *restful.Request, resp *restful.Response) {
+	healthHandler := func(_ *restful.Request, resp *restful.Response) {
 		_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]string{"status": "ok"})
-	}))
+	}
+	ws.Route(ws.GET("/healthz").To(healthHandler))
+	ws.Route(ws.GET("/health").To(healthHandler))
 	ws.Route(ws.GET("/metrics").To(func(req *restful.Request, resp *restful.Response) {
 		s.metrics.Handler().ServeHTTP(resp.ResponseWriter, req.Request)
 	}))
@@ -113,8 +112,7 @@ func (s *APIServer) Run(ctx context.Context) error {
 		return err
 	}
 
-	port := getenv("PORT", "8080")
-	addr := ":" + port
+	addr := fmt.Sprintf(":%d", s.port)
 	slog.Info("distributor api listening", "addr", addr)
 
 	server := &http.Server{
@@ -132,7 +130,6 @@ func (s *APIServer) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
-		s.setDependencyStatus("nats", nil, 0)
 		_ = s.nc.Drain()
 		return nil
 	case err := <-errCh:
@@ -224,14 +221,6 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 	desiredKeys := make(map[string]struct{})
 
 	for _, ns := range s.watchNamespaces {
-		s.setDependencyStatus("kube_informer_synced", map[string]string{
-			"namespace": namespaceOrEmpty(ns),
-			"resource":  "configmap",
-		}, 0)
-		s.setDependencyStatus("kube_informer_synced", map[string]string{
-			"namespace": namespaceOrEmpty(ns),
-			"resource":  "secret",
-		}, 0)
 		factory := informers.NewSharedInformerFactoryWithOptions(
 			s.kube.ClientSet(),
 			0,
@@ -268,25 +257,8 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 		factory.Start(ctx.Done())
 
 		if ok := cache.WaitForCacheSync(ctx.Done(), cmInf.HasSynced, secInf.HasSynced); !ok {
-			s.setDependencyStatus("kube_informer_synced", map[string]string{
-				"namespace": namespaceOrEmpty(ns),
-				"resource":  "configmap",
-			}, 0)
-			s.setDependencyStatus("kube_informer_synced", map[string]string{
-				"namespace": namespaceOrEmpty(ns),
-				"resource":  "secret",
-			}, 0)
 			return fmt.Errorf("kube watch sync failed: namespace=%s", ns)
 		}
-
-		s.setDependencyStatus("kube_informer_synced", map[string]string{
-			"namespace": namespaceOrEmpty(ns),
-			"resource":  "configmap",
-		}, 1)
-		s.setDependencyStatus("kube_informer_synced", map[string]string{
-			"namespace": namespaceOrEmpty(ns),
-			"resource":  "secret",
-		}, 1)
 
 		if err := s.reconcileNamespaceFromStore(ns, cmInf, secInf, desiredKeys); err != nil {
 			return err
@@ -314,7 +286,7 @@ func (s *APIServer) reconcileNamespaceFromStore(
 			continue
 		}
 		key := store.KeyFor(namespace, "configmap", cm.Name)
-		if !kube.IsManagedConfigMap(cm) {
+		if !s.kube.IsManagedConfigMap(cm) {
 			continue
 		}
 		value := kube.ValueFromConfigMap(cm)
@@ -333,7 +305,7 @@ func (s *APIServer) reconcileNamespaceFromStore(
 			continue
 		}
 		key := store.KeyFor(namespace, "secret", sec.Name)
-		if !kube.IsManagedSecret(sec) {
+		if !s.kube.IsManagedSecret(sec) {
 			continue
 		}
 		value := kube.ValueFromSecret(sec)
@@ -413,7 +385,7 @@ func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 	}
 	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
 
-	if !kube.IsManagedConfigMap(cm) {
+	if !s.kube.IsManagedConfigMap(cm) {
 		slog.Info("kube configmap not managed, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
 			s.recordKVOperation("delete", "error")
@@ -484,7 +456,7 @@ func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 	}
 	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
 
-	if !kube.IsManagedSecret(sec) {
+	if !s.kube.IsManagedSecret(sec) {
 		slog.Info("kube secret not managed, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
 			s.recordKVOperation("delete", "error")
@@ -569,28 +541,6 @@ func (s *APIServer) recordKVOperation(operation, result string) {
 	)
 }
 
-func (s *APIServer) setDependencyStatus(dependency string, labels map[string]string, value float64) {
-	allLabels := map[string]string{
-		"dependency": dependency,
-	}
-	for key, labelValue := range labels {
-		allLabels[key] = labelValue
-	}
-	s.metrics.SetGauge(
-		"cfg_distributor_dependency_status",
-		"Dependency health status where 1 is healthy and 0 is unhealthy.",
-		allLabels,
-		value,
-	)
-}
-
-func namespaceOrEmpty(namespace string) string {
-	if namespace == "" {
-		return "default"
-	}
-	return namespace
-}
-
 func extractConfigMap(obj interface{}) *corev1.ConfigMap {
 	if cm, ok := obj.(*corev1.ConfigMap); ok {
 		return cm
@@ -621,24 +571,31 @@ type ResourceGroup struct {
 	Resources []string
 }
 
-func defaultWatchResources() []ResourceGroup {
+func watchResourcesFromConfig(resources []string) []ResourceGroup {
+	normalized := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		value := strings.TrimSpace(resource)
+		if value == "" {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		normalized = []string{"configmaps", "secrets"}
+	}
 	return []ResourceGroup{
 		{
-			Group:   "",
-			Version: "v1",
-			Resources: []string{
-				"configmaps",
-				"secrets",
-			},
+			Group:     "",
+			Version:   "v1",
+			Resources: normalized,
 		},
 	}
 }
 
-func parseNamespaces(raw string) []string {
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		v := strings.TrimSpace(p)
+func normalizeNamespaces(namespaces []string) []string {
+	out := make([]string, 0, len(namespaces))
+	for _, namespace := range namespaces {
+		v := strings.TrimSpace(namespace)
 		if v == "" {
 			continue
 		}
@@ -658,12 +615,4 @@ func ensureKV(js nats.JetStreamContext, bucketName string) (nats.KeyValue, error
 		Bucket:  bucketName,
 		History: 5,
 	})
-}
-
-func getenv(key, def string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		return def
-	}
-	return v
 }
