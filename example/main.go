@@ -25,7 +25,7 @@ func main() {
 		Level: slog.LevelInfo,
 	})))
 
-	natsURL := getenv("NATS_URL", nats.DefaultURL)
+	natsURL := getenv("NATS_URL", "nats://10.255.254.22:30422")
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
 		slog.Error("connect", "err", err)

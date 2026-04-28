@@ -5,7 +5,7 @@ server:
   port: 8080
 
 nats:
-  url: nats://localhost:4222
+  url: nats://10.255.254.22:4222
   bucket: UPM_CONFIG
 
 watch:
