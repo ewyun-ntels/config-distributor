@@ -93,7 +93,9 @@ func (s *APIServer) installHealthz() {
 	ws := new(restful.WebService)
 	ws.Path("")
 	healthHandler := func(_ *restful.Request, resp *restful.Response) {
-		_ = resp.WriteHeaderAndEntity(http.StatusOK, map[string]string{"status": "ok"})
+		resp.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		resp.WriteHeader(http.StatusOK)
+		_, _ = resp.Write([]byte("ok\n"))
 	}
 	ws.Route(ws.GET("/healthz").To(healthHandler))
 	ws.Route(ws.GET("/health").To(healthHandler))
