@@ -71,6 +71,10 @@ func (c *Client) ClientSet() kubernetes.Interface {
 	return c.cs
 }
 
+func (c *Client) ManagedLabelSelector() string {
+	return fmt.Sprintf("%s=%s", c.managedLabel.Key, c.managedLabel.Value)
+}
+
 func loadConfig() (*rest.Config, error) {
 	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
 		return clientcmd.BuildConfigFromFlags("", kubeconfig)

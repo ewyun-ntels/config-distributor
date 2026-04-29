@@ -13,6 +13,7 @@ import (
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	urlruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
@@ -224,6 +225,9 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 			s.kube.ClientSet(),
 			0,
 			informers.WithNamespace(ns),
+			informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
+				lo.LabelSelector = s.kube.ManagedLabelSelector()
+			}),
 		)
 
 		var syncChecks []cache.InformerSynced
@@ -294,9 +298,6 @@ func (s *APIServer) reconcileNamespaceFromStore(
 				continue
 			}
 			key := store.KeyFor(namespace, "configmap", cm.Name)
-			if !s.kube.IsManagedConfigMap(cm) {
-				continue
-			}
 			value, err := kube.ValueFromConfigMap(cm)
 			if err != nil {
 				return err
@@ -318,9 +319,6 @@ func (s *APIServer) reconcileNamespaceFromStore(
 				continue
 			}
 			key := store.KeyFor(namespace, "secret", sec.Name)
-			if !s.kube.IsManagedSecret(sec) {
-				continue
-			}
 			value, err := kube.ValueFromSecret(sec)
 			if err != nil {
 				return err
@@ -392,24 +390,10 @@ func containsString(items []string, target string) bool {
 func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok || cm == nil {
-		s.recordKubeEvent("configmap", action, "error")
 		slog.Info("kube configmap unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
-
-	if !s.kube.IsManagedConfigMap(cm) {
-		slog.Info("kube configmap not managed, delete kv if exists", "action", action, "key", key)
-		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation("delete", "error")
-			s.recordKubeEvent("configmap", action, "error")
-			slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
-			return
-		}
-		s.recordKVOperation("delete", "success")
-		s.recordKubeEvent("configmap", action, "success")
-		return
-	}
 
 	value, err := kube.ValueFromConfigMap(cm)
 	if err != nil {
@@ -469,24 +453,10 @@ func (s *APIServer) handleConfigMapDelete(obj interface{}) {
 func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 	sec, ok := obj.(*corev1.Secret)
 	if !ok || sec == nil {
-		s.recordKubeEvent("secret", action, "error")
 		slog.Info("kube secret unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
-
-	if !s.kube.IsManagedSecret(sec) {
-		slog.Info("kube secret not managed, delete kv if exists", "action", action, "key", key)
-		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation("delete", "error")
-			s.recordKubeEvent("secret", action, "error")
-			slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
-			return
-		}
-		s.recordKVOperation("delete", "success")
-		s.recordKubeEvent("secret", action, "success")
-		return
-	}
 
 	value, err := kube.ValueFromSecret(sec)
 	if err != nil {
