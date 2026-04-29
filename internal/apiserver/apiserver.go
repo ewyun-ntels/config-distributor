@@ -25,6 +25,20 @@ import (
 	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
+const (
+	// KV operation actions
+	actionPut    = "put"
+	actionDelete = "delete"
+
+	// Kubernetes resource types
+	resourceConfigMap = "configmap"
+	resourceSecret    = "secret"
+
+	// Operation results
+	resultSuccess = "success"
+	resultError   = "error"
+)
+
 type APIServer struct {
 	container *restful.Container
 	kv        nats.KeyValue
@@ -397,32 +411,32 @@ func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 
 	value, err := kube.ValueFromConfigMap(cm)
 	if err != nil {
-		s.recordKVOperation(cm.Namespace, cm.Name, "put", "error")
-		s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "error")
+		s.recordKVOperation(cm.Namespace, cm.Name, actionPut, resultError)
+		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError)
 		slog.Error("kube configmap marshal failed", "action", action, "key", key, "err", err)
 		return
 	}
 	if value == "" {
 		slog.Info("kube configmap empty value, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation(cm.Namespace, cm.Name, "delete", "error")
-			s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "error")
+			s.recordKVOperation(cm.Namespace, cm.Name, actionDelete, resultError)
+			s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError)
 			slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
 			return
 		}
-		s.recordKVOperation(cm.Namespace, cm.Name, "delete", "success")
-		s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "success")
+		s.recordKVOperation(cm.Namespace, cm.Name, actionDelete, resultSuccess)
+		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess)
 		return
 	}
 
 	if err := s.putIfChangedByRV(key, []byte(value), cm.ResourceVersion); err != nil {
-		s.recordKVOperation(cm.Namespace, cm.Name, "put", "error")
-		s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "error")
+		s.recordKVOperation(cm.Namespace, cm.Name, actionPut, resultError)
+		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError)
 		slog.Error("kube configmap put kv failed", "action", action, "key", key, "err", err)
 		return
 	}
-	s.recordKVOperation(cm.Namespace, cm.Name, "put", "success")
-	s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "success")
+	s.recordKVOperation(cm.Namespace, cm.Name, actionPut, resultSuccess)
+	s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess)
 	slog.Info("kube configmap kv put",
 		"action", action,
 		"key", key,
@@ -434,19 +448,19 @@ func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 func (s *APIServer) handleConfigMapDelete(action string, obj interface{}) {
 	cm := extractConfigMap(obj)
 	if cm == nil {
-		s.recordKubeEvent("", "configmap", "", action, "error")
+		s.recordKubeEvent("", resourceConfigMap, "", action, resultError)
 		slog.Info("kube configmap delete unexpected object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
 	if err := s.deleteIfExists(key); err != nil {
-		s.recordKVOperation(cm.Namespace, cm.Name, "delete", "error")
-		s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "error")
+		s.recordKVOperation(cm.Namespace, cm.Name, actionDelete, resultError)
+		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError)
 		slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
 		return
 	}
-	s.recordKVOperation(cm.Namespace, cm.Name, "delete", "success")
-	s.recordKubeEvent(cm.Namespace, "configmap", cm.Name, action, "success")
+	s.recordKVOperation(cm.Namespace, cm.Name, actionDelete, resultSuccess)
+	s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess)
 	slog.Info("kube configmap delete kv", "action", action, "key", key)
 }
 
@@ -460,32 +474,32 @@ func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 
 	value, err := kube.ValueFromSecret(sec)
 	if err != nil {
-		s.recordKVOperation(sec.Namespace, sec.Name, "put", "error")
-		s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "error")
+		s.recordKVOperation(sec.Namespace, sec.Name, actionPut, resultError)
+		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError)
 		slog.Error("kube secret marshal failed", "action", action, "key", key, "err", err)
 		return
 	}
 	if value == "" {
 		slog.Info("kube secret empty value, delete kv if exists", "action", action, "key", key)
 		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation(sec.Namespace, sec.Name, "delete", "error")
-			s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "error")
+			s.recordKVOperation(sec.Namespace, sec.Name, actionDelete, resultError)
+			s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError)
 			slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
 			return
 		}
-		s.recordKVOperation(sec.Namespace, sec.Name, "delete", "success")
-		s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "success")
+		s.recordKVOperation(sec.Namespace, sec.Name, actionDelete, resultSuccess)
+		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess)
 		return
 	}
 
 	if err := s.putIfChangedByRV(key, []byte(value), sec.ResourceVersion); err != nil {
-		s.recordKVOperation(sec.Namespace, sec.Name, "put", "error")
-		s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "error")
+		s.recordKVOperation(sec.Namespace, sec.Name, actionPut, resultError)
+		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError)
 		slog.Error("kube secret put kv failed", "action", action, "key", key, "err", err)
 		return
 	}
-	s.recordKVOperation(sec.Namespace, sec.Name, "put", "success")
-	s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "success")
+	s.recordKVOperation(sec.Namespace, sec.Name, actionPut, resultSuccess)
+	s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess)
 	slog.Info("kube secret kv put",
 		"action", action,
 		"key", key,
@@ -497,19 +511,19 @@ func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 func (s *APIServer) handleSecretDelete(action string, obj interface{}) {
 	sec := extractSecret(obj)
 	if sec == nil {
-		s.recordKubeEvent("", "secret", "", action, "error")
+		s.recordKubeEvent("", resourceSecret, "", action, resultError)
 		slog.Info("kube secret delete unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
 	if err := s.deleteIfExists(key); err != nil {
-		s.recordKVOperation(sec.Namespace, sec.Name, "delete", "error")
-		s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "error")
+		s.recordKVOperation(sec.Namespace, sec.Name, actionDelete, resultError)
+		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError)
 		slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
 		return
 	}
-	s.recordKVOperation(sec.Namespace, sec.Name, "delete", "success")
-	s.recordKubeEvent(sec.Namespace, "secret", sec.Name, action, "success")
+	s.recordKVOperation(sec.Namespace, sec.Name, actionDelete, resultSuccess)
+	s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess)
 	slog.Info("kube secret delete kv", "action", action, "key", key)
 }
 
