@@ -243,7 +243,7 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 					s.handleConfigMapUpsert("update", newObj)
 				},
 				DeleteFunc: func(obj interface{}) {
-					s.handleConfigMapDelete(obj)
+					s.handleConfigMapDelete("delete", obj)
 				},
 			})
 			syncChecks = append(syncChecks, cmInf.HasSynced)
@@ -259,7 +259,7 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 					s.handleSecretUpsert("update", newObj)
 				},
 				DeleteFunc: func(obj interface{}) {
-					s.handleSecretDelete(obj)
+					s.handleSecretDelete("delete", obj)
 				},
 			})
 			syncChecks = append(syncChecks, secInf.HasSynced)
@@ -431,23 +431,23 @@ func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
 	)
 }
 
-func (s *APIServer) handleConfigMapDelete(obj interface{}) {
+func (s *APIServer) handleConfigMapDelete(action string, obj interface{}) {
 	cm := extractConfigMap(obj)
 	if cm == nil {
-		s.recordKubeEvent("configmap", "delete", "error")
+		s.recordKubeEvent("configmap", action, "error")
 		slog.Info("kube configmap delete unexpected object", "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
 	if err := s.deleteIfExists(key); err != nil {
 		s.recordKVOperation("delete", "error")
-		s.recordKubeEvent("configmap", "delete", "error")
-		slog.Error("kube configmap delete kv failed", "key", key, "err", err)
+		s.recordKubeEvent("configmap", action, "error")
+		slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
 		return
 	}
 	s.recordKVOperation("delete", "success")
-	s.recordKubeEvent("configmap", "delete", "success")
-	slog.Info("kube configmap delete kv", "key", key)
+	s.recordKubeEvent("configmap", action, "success")
+	slog.Info("kube configmap delete kv", "action", action, "key", key)
 }
 
 func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
@@ -494,23 +494,23 @@ func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
 	)
 }
 
-func (s *APIServer) handleSecretDelete(obj interface{}) {
+func (s *APIServer) handleSecretDelete(action string, obj interface{}) {
 	sec := extractSecret(obj)
 	if sec == nil {
-		s.recordKubeEvent("secret", "delete", "error")
-		slog.Info("kube secret delete unexpected object", "type", fmt.Sprintf("%T", obj))
+		s.recordKubeEvent("secret", action, "error")
+		slog.Info("kube secret delete unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
 		return
 	}
 	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
 	if err := s.deleteIfExists(key); err != nil {
 		s.recordKVOperation("delete", "error")
-		s.recordKubeEvent("secret", "delete", "error")
-		slog.Error("kube secret delete kv failed", "key", key, "err", err)
+		s.recordKubeEvent("secret", action, "error")
+		slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
 		return
 	}
 	s.recordKVOperation("delete", "success")
-	s.recordKubeEvent("secret", "delete", "success")
-	slog.Info("kube secret delete kv", "key", key)
+	s.recordKubeEvent("secret", action, "success")
+	slog.Info("kube secret delete kv", "action", action, "key", key)
 }
 
 func (s *APIServer) recordKubeEvent(resource, action, result string) {
