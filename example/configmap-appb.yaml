@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: appb
+  name: appbccccc
   namespace: default
   labels:
     config.upm.io/managed: "true"
 data:
   app: appB
-  version: "30"
+  version: "3dfsdfsd0"
