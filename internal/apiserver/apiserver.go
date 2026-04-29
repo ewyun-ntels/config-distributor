@@ -37,6 +37,11 @@ const (
 	// Operation results
 	resultSuccess = "success"
 	resultError   = "error"
+
+	// Kubernetes event actions
+	eventAdd    = "add"
+	eventUpdate = "update"
+	eventDelete = "delete"
 )
 
 type APIServer struct {
@@ -229,8 +234,8 @@ func (s *APIServer) deleteCacheForKey(key string) {
 func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 	slog.Info("kube watch start")
 
-	watchCM := containsString(s.watchResources, "configmap")
-	watchSec := containsString(s.watchResources, "secret")
+	watchCM := containsString(s.watchResources, resourceConfigMap)
+	watchSec := containsString(s.watchResources, resourceSecret)
 
 	desiredKeys := make(map[string]struct{})
 
@@ -251,13 +256,13 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 			cmInf = factory.Core().V1().ConfigMaps().Informer()
 			cmInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 				AddFunc: func(obj interface{}) {
-					s.handleConfigMapUpsert("add", obj)
+					s.handleConfigMapUpsert(eventAdd, obj)
 				},
 				UpdateFunc: func(_, newObj interface{}) {
-					s.handleConfigMapUpsert("update", newObj)
+					s.handleConfigMapUpsert(eventUpdate, newObj)
 				},
 				DeleteFunc: func(obj interface{}) {
-					s.handleConfigMapDelete("delete", obj)
+					s.handleConfigMapDelete(eventDelete, obj)
 				},
 			})
 			syncChecks = append(syncChecks, cmInf.HasSynced)
@@ -267,13 +272,13 @@ func (s *APIServer) startKubeWatchers(ctx context.Context) error {
 			secInf = factory.Core().V1().Secrets().Informer()
 			secInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 				AddFunc: func(obj interface{}) {
-					s.handleSecretUpsert("add", obj)
+					s.handleSecretUpsert(eventAdd, obj)
 				},
 				UpdateFunc: func(_, newObj interface{}) {
-					s.handleSecretUpsert("update", newObj)
+					s.handleSecretUpsert(eventUpdate, newObj)
 				},
 				DeleteFunc: func(obj interface{}) {
-					s.handleSecretDelete("delete", obj)
+					s.handleSecretDelete(eventDelete, obj)
 				},
 			})
 			syncChecks = append(syncChecks, secInf.HasSynced)
