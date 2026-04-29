@@ -527,14 +527,14 @@ func (s *APIServer) recordKubeEvent(namespace, resource, name, action, result st
 	)
 }
 
-func (s *APIServer) recordKVOperation(namespace, name, operation, result string) {
+func (s *APIServer) recordKVOperation(namespace, name, action, result string) {
 	s.metrics.IncCounter(
 		"cfg_distributor_kv_operations_total",
 		"Total number of KV operations attempted by the distributor.",
 		map[string]string{
 			"namespace": namespace,
 			"name":      name,
-			"operation": operation,
+			"action":    action,
 			"result":    result,
 		},
 	)
