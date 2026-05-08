@@ -1,66 +1,47 @@
 package apiserver
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	urlruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/informers"
-	"k8s.io/client-go/tools/cache"
 
 	"ntels.com/upm/cfg-distributor/internal/api/resources/v1alpha1"
 	"ntels.com/upm/cfg-distributor/internal/config"
 	"ntels.com/upm/cfg-distributor/internal/kube"
 	"ntels.com/upm/cfg-distributor/internal/metrics"
+	"ntels.com/upm/cfg-distributor/internal/reconciler"
 	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
 const (
-	// KV operation actions
-	actionPut    = "put"
-	actionDelete = "delete"
-
-	// Kubernetes resource types
 	resourceConfigMap = "configmap"
-	resourceSecret    = "secret"
 
-	// Operation results
 	resultSuccess = "success"
 	resultError   = "error"
 
-	// Error reasons
-	reasonMarshalFailed = "marshal_failed"
-	reasonStorageFailed = "storage_failed"
-	reasonInvalidObject = "invalid_object"
-	reasonNone          = "none"
-
-	// Kubernetes event actions
-	eventAdd    = "add"
-	eventUpdate = "update"
-	eventDelete = "delete"
+	reasonMultiKeyOrEmpty = "multi_key_or_empty"
 )
 
 type APIServer struct {
 	container *restful.Container
 	kv        nats.KeyValue
 	nc        *nats.Conn
-	kube      *kube.Client
 	cache     *store.ResourceCache
 	metrics   *metrics.Registry
 
-	port            int
-	watchNamespaces []string
-	watchResources  []string // singular forms: "configmap", "secret"
+	port                int
+	bootstrapNamespaces []string
+	managedLabel        kube.ManagedLabel
+	reconcilerEnabled   bool
+	reconcilerInterval  time.Duration
 }
 
 func New(cfg *config.Config) (*APIServer, error) {
@@ -80,26 +61,22 @@ func New(cfg *config.Config) (*APIServer, error) {
 		return nil, err
 	}
 
-	kubeClient, err := kube.NewClient(kube.ManagedLabel{
-		Key:   cfg.Filter.ManagedLabel.Key,
-		Value: cfg.Filter.ManagedLabel.Value,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	slog.Info("init distributor", "nats_url", natsURL, "bucket", cfg.NATS.Bucket)
 
 	s := &APIServer{
-		container:       restful.NewContainer(),
-		kv:              kv,
-		nc:              nc,
-		kube:            kubeClient,
-		cache:           store.NewResourceCache(),
-		metrics:         metrics.NewRegistry(),
-		port:            cfg.Server.Port,
-		watchNamespaces: normalizeNamespaces(cfg.Watch.Namespaces),
-		watchResources:  watchResourcesFromConfig(cfg.Watch.Resources),
+		container:           restful.NewContainer(),
+		kv:                  kv,
+		nc:                  nc,
+		cache:               store.NewResourceCache(),
+		metrics:             metrics.NewRegistry(),
+		port:                cfg.Server.Port,
+		bootstrapNamespaces: normalizeNamespaces(cfg.Bootstrap.Namespaces),
+		managedLabel: kube.ManagedLabel{
+			Key:   cfg.Filter.ManagedLabel.Key,
+			Value: cfg.Filter.ManagedLabel.Value,
+		},
+		reconcilerEnabled:  cfg.Reconciler.Enabled,
+		reconcilerInterval: time.Duration(cfg.Reconciler.IntervalSeconds) * time.Second,
 	}
 	return s, nil
 }
@@ -112,7 +89,7 @@ func (s *APIServer) PrepareRun() error {
 }
 
 func (s *APIServer) installAPIs() {
-	urlruntime.Must(v1alpha1.AddToContainer(s.container, s.kv, s.kube, s.cache))
+	urlruntime.Must(v1alpha1.AddToContainer(s.container, s.kv, s.cache, s.metrics))
 }
 
 func (s *APIServer) installHealthz() {
@@ -135,10 +112,15 @@ func (s *APIServer) Run(ctx context.Context) error {
 	if err := s.PrepareRun(); err != nil {
 		return err
 	}
-	slog.Info("start distributor", "namespaces", s.watchNamespaces, "resources", s.watchResources)
-	if err := s.startKubeWatchers(ctx); err != nil {
+	slog.Info("start distributor", "bootstrap_namespaces", s.bootstrapNamespaces)
+
+	if err := s.bootstrapIfNeeded(ctx); err != nil {
 		return err
 	}
+	if err := s.preloadCacheFromKV(); err != nil {
+		return err
+	}
+	s.startReconciler(ctx)
 
 	addr := fmt.Sprintf(":%d", s.port)
 	slog.Info("distributor api listening", "addr", addr)
@@ -165,462 +147,149 @@ func (s *APIServer) Run(ctx context.Context) error {
 		_ = s.nc.Drain()
 		return nil
 	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
 		return err
 	}
 }
 
-func (s *APIServer) putIfChangedByRV(key string, value []byte, resourceVersion string) error {
-	if resourceVersion != "" {
-		entry, err := s.kv.Get(key)
-		if err == nil {
-			// API writes may already have stored the same Kubernetes state in KV.
-			// Skip the informer-driven write when the observed resourceVersion is unchanged.
-			if kube.ExtractResourceVersion(entry.Value()) == resourceVersion {
-				return nil
-			}
-		} else if err != nats.ErrKeyNotFound {
-			return err
-		}
-	} else {
-		// Fallback when resourceVersion is unavailable.
-		entry, err := s.kv.Get(key)
-		if err == nil {
-			if bytes.Equal(entry.Value(), value) {
-				return nil
-			}
-		} else if err != nats.ErrKeyNotFound {
-			return err
-		}
-	}
-
-	rev, err := s.kv.Put(key, value)
-	if err != nil {
-		return err
-	}
-	s.updateCacheForKey(key, rev, string(value))
-	return nil
-}
-
-func (s *APIServer) deleteIfExists(key string) error {
-	_, err := s.kv.Get(key)
-	if err == nats.ErrKeyNotFound {
-		s.deleteCacheForKey(key)
+func (s *APIServer) bootstrapIfNeeded(ctx context.Context) error {
+	_, err := s.kv.Get(store.BootstrapSentinelKey)
+	if err == nil {
+		slog.Info("bootstrap skipped: sentinel exists", "key", store.BootstrapSentinelKey)
 		return nil
 	}
+	if err != nats.ErrKeyNotFound {
+		return fmt.Errorf("check bootstrap sentinel: %w", err)
+	}
+
+	hasNormalKeys, err := s.hasNormalKVKeys()
 	if err != nil {
 		return err
 	}
-
-	if err := s.kv.Delete(key); err != nil && err != nats.ErrKeyNotFound {
-		return err
+	if hasNormalKeys {
+		return fmt.Errorf("KV has data without bootstrap sentinel %q; manual migration required", store.BootstrapSentinelKey)
 	}
-	s.deleteCacheForKey(key)
+
+	kubeClient, err := kube.NewClient(s.managedLabel)
+	if err != nil {
+		return fmt.Errorf("init kube client for bootstrap: %w", err)
+	}
+
+	for _, namespace := range s.bootstrapNamespaces {
+		list, err := kubeClient.ClientSet().CoreV1().ConfigMaps(namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: kubeClient.ManagedLabelSelector(),
+		})
+		if err != nil {
+			return fmt.Errorf("list bootstrap configmaps in namespace %q: %w", namespace, err)
+		}
+
+		for i := range list.Items {
+			cm := &list.Items[i]
+			value, ok := kube.ValueFromConfigMap(cm)
+			if !ok {
+				slog.Warn("skip bootstrap configmap with empty or multi-key data", "namespace", namespace, "name", cm.Name)
+				s.recordBootstrapSkipped(namespace, reasonMultiKeyOrEmpty)
+				continue
+			}
+			key := store.KeyFor(namespace, resourceConfigMap, cm.Name)
+			if _, err := s.kv.Put(key, []byte(value)); err != nil {
+				s.recordBootstrapSeeded(namespace, resultError)
+				return fmt.Errorf("seed bootstrap configmap %q: %w", key, err)
+			}
+			s.recordBootstrapSeeded(namespace, resultSuccess)
+			slog.Info("bootstrap configmap seeded", "key", key)
+		}
+	}
+
+	if _, err := s.kv.Put(store.BootstrapSentinelKey, []byte(time.Now().Format(time.RFC3339))); err != nil {
+		return fmt.Errorf("write bootstrap sentinel: %w", err)
+	}
+	slog.Info("bootstrap completed", "sentinel", store.BootstrapSentinelKey)
 	return nil
 }
 
-func (s *APIServer) updateCacheForKey(key string, revision uint64, value string) {
-	namespace, kind, name, ok := store.ParseKey(key)
-	if !ok {
-		return
+func (s *APIServer) hasNormalKVKeys() (bool, error) {
+	keys, err := s.kv.Keys()
+	if err == nats.ErrNoKeysFound {
+		return false, nil
 	}
-	s.cache.Upsert(namespace, kind, name, store.CachedValue{
-		Revision: revision,
-		Value:    value,
-	})
+	if err != nil {
+		return false, fmt.Errorf("list kv keys for bootstrap state: %w", err)
+	}
+	for _, key := range keys {
+		if key != store.BootstrapSentinelKey {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
-func (s *APIServer) deleteCacheForKey(key string) {
-	namespace, kind, name, ok := store.ParseKey(key)
-	if !ok {
-		return
-	}
-	s.cache.Delete(namespace, kind, name)
-}
-
-func (s *APIServer) startKubeWatchers(ctx context.Context) error {
-	slog.Info("kube watch start")
-
-	watchCM := containsString(s.watchResources, resourceConfigMap)
-	watchSec := containsString(s.watchResources, resourceSecret)
-
-	desiredKeys := make(map[string]struct{})
-
-	for _, ns := range s.watchNamespaces {
-		factory := informers.NewSharedInformerFactoryWithOptions(
-			s.kube.ClientSet(),
-			0,
-			informers.WithNamespace(ns),
-			informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
-				lo.LabelSelector = s.kube.ManagedLabelSelector()
-			}),
-		)
-
-		var syncChecks []cache.InformerSynced
-		var cmInf, secInf cache.SharedIndexInformer
-
-		if watchCM {
-			cmInf = factory.Core().V1().ConfigMaps().Informer()
-			cmInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-				AddFunc: func(obj interface{}) {
-					s.handleConfigMapUpsert(eventAdd, obj)
-				},
-				UpdateFunc: func(_, newObj interface{}) {
-					s.handleConfigMapUpsert(eventUpdate, newObj)
-				},
-				DeleteFunc: func(obj interface{}) {
-					s.handleConfigMapDelete(eventDelete, obj)
-				},
-			})
-			syncChecks = append(syncChecks, cmInf.HasSynced)
-		}
-
-		if watchSec {
-			secInf = factory.Core().V1().Secrets().Informer()
-			secInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-				AddFunc: func(obj interface{}) {
-					s.handleSecretUpsert(eventAdd, obj)
-				},
-				UpdateFunc: func(_, newObj interface{}) {
-					s.handleSecretUpsert(eventUpdate, newObj)
-				},
-				DeleteFunc: func(obj interface{}) {
-					s.handleSecretDelete(eventDelete, obj)
-				},
-			})
-			syncChecks = append(syncChecks, secInf.HasSynced)
-		}
-
-		factory.Start(ctx.Done())
-
-		if ok := cache.WaitForCacheSync(ctx.Done(), syncChecks...); !ok {
-			return fmt.Errorf("kube watch sync failed: namespace=%s", ns)
-		}
-
-		if err := s.reconcileNamespaceFromStore(ns, cmInf, secInf, desiredKeys); err != nil {
-			return err
-		}
-		slog.Info("kube watch ready", "namespace", ns)
-	}
-
-	if err := s.deleteStaleKVKeys(desiredKeys); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *APIServer) reconcileNamespaceFromStore(
-	namespace string,
-	cmInf cache.SharedIndexInformer,
-	secInf cache.SharedIndexInformer,
-	desiredKeys map[string]struct{},
-) error {
-	slog.Info("startup reconcile begin", "namespace", namespace)
-
-	if cmInf != nil {
-		for _, obj := range cmInf.GetStore().List() {
-			cm, ok := obj.(*corev1.ConfigMap)
-			if !ok || cm == nil {
-				continue
-			}
-			key := store.KeyFor(namespace, "configmap", cm.Name)
-			value, err := kube.ValueFromConfigMap(cm)
-			if err != nil {
-				return err
-			}
-			if value == "" {
-				continue
-			}
-			desiredKeys[key] = struct{}{}
-			if err := s.putIfChangedByRV(key, []byte(value), cm.ResourceVersion); err != nil {
-				return err
-			}
-		}
-	}
-
-	if secInf != nil {
-		for _, obj := range secInf.GetStore().List() {
-			sec, ok := obj.(*corev1.Secret)
-			if !ok || sec == nil {
-				continue
-			}
-			key := store.KeyFor(namespace, "secret", sec.Name)
-			value, err := kube.ValueFromSecret(sec)
-			if err != nil {
-				return err
-			}
-			if value == "" {
-				continue
-			}
-			desiredKeys[key] = struct{}{}
-			if err := s.putIfChangedByRV(key, []byte(value), sec.ResourceVersion); err != nil {
-				return err
-			}
-		}
-	}
-
-	slog.Info("startup reconcile done", "namespace", namespace)
-	return nil
-}
-
-func (s *APIServer) deleteStaleKVKeys(desiredKeys map[string]struct{}) error {
+func (s *APIServer) preloadCacheFromKV() error {
 	keys, err := s.kv.Keys()
 	if err == nats.ErrNoKeysFound {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("list kv keys for cache preload: %w", err)
 	}
 
-	stale := make([]string, 0)
+	loaded := 0
 	for _, key := range keys {
-		if !s.isWatchedKey(key) {
+		if key == store.BootstrapSentinelKey {
 			continue
 		}
-		if _, ok := desiredKeys[key]; ok {
+		namespace, kind, name, ok := store.ParseKey(key)
+		if !ok || kind != resourceConfigMap {
 			continue
 		}
-		stale = append(stale, key)
-	}
-
-	sort.Strings(stale)
-	for _, key := range stale {
-		if err := s.deleteIfExists(key); err != nil {
-			return err
+		entry, err := s.kv.Get(key)
+		if err == nats.ErrKeyNotFound {
+			continue
 		}
-		slog.Info("startup reconcile delete stale kv", "key", key)
+		if err != nil {
+			return fmt.Errorf("get kv key %q for cache preload: %w", key, err)
+		}
+		s.cache.Upsert(namespace, kind, name, store.CachedValue{
+			Revision: entry.Revision(),
+			Value:    string(entry.Value()),
+		})
+		loaded++
 	}
+	slog.Info("cache preload completed", "items", loaded)
 	return nil
 }
 
-func (s *APIServer) isWatchedKey(key string) bool {
-	namespace, kind, _, ok := store.ParseKey(key)
-	if !ok {
-		return false
+func (s *APIServer) startReconciler(ctx context.Context) {
+	if !s.reconcilerEnabled {
+		slog.Info("reconciler disabled by config")
+		return
 	}
-	if !containsString(s.watchNamespaces, namespace) {
-		return false
-	}
-	return containsString(s.watchResources, kind)
+	r := reconciler.New(s.kv, s.managedLabel, s.reconcilerInterval, s.metrics)
+	go r.Run(ctx)
 }
 
-func containsString(items []string, target string) bool {
-	for _, item := range items {
-		if item == target {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *APIServer) handleConfigMapUpsert(action string, obj interface{}) {
-	cm, ok := obj.(*corev1.ConfigMap)
-	if !ok || cm == nil {
-		slog.Info("kube configmap unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
-		return
-	}
-	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
-
-	value, err := kube.ValueFromConfigMap(cm)
-	if err != nil {
-		s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionPut, resultError, reasonMarshalFailed)
-		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError, reasonMarshalFailed)
-		slog.Error("kube configmap marshal failed", "action", action, "key", key, "err", err)
-		return
-	}
-	if value == "" {
-		slog.Info("kube configmap empty value, delete kv if exists", "action", action, "key", key)
-		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionDelete, resultError, reasonStorageFailed)
-			s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError, reasonStorageFailed)
-			slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
-			return
-		}
-		s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionDelete, resultSuccess, reasonNone)
-		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess, reasonNone)
-		return
-	}
-
-	if err := s.putIfChangedByRV(key, []byte(value), cm.ResourceVersion); err != nil {
-		s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionPut, resultError, reasonStorageFailed)
-		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError, reasonStorageFailed)
-		slog.Error("kube configmap put kv failed", "action", action, "key", key, "err", err)
-		return
-	}
-	s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionPut, resultSuccess, reasonNone)
-	s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess, reasonNone)
-	slog.Info("kube configmap kv put",
-		"action", action,
-		"key", key,
-		"rv", cm.ResourceVersion,
-		"value_len", len(value),
-	)
-}
-
-func (s *APIServer) handleConfigMapDelete(action string, obj interface{}) {
-	cm := extractConfigMap(obj)
-	if cm == nil {
-		s.recordKVOperation("", resourceConfigMap, "", actionDelete, resultError, reasonInvalidObject)
-		s.recordKubeEvent("", resourceConfigMap, "", action, resultError, reasonInvalidObject)
-		slog.Info("kube configmap delete unexpected object", "type", fmt.Sprintf("%T", obj))
-		return
-	}
-	key := store.KeyFor(cm.Namespace, "configmap", cm.Name)
-	if err := s.deleteIfExists(key); err != nil {
-		s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionDelete, resultError, reasonStorageFailed)
-		s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultError, reasonStorageFailed)
-		slog.Error("kube configmap delete kv failed", "action", action, "key", key, "err", err)
-		return
-	}
-	s.recordKVOperation(cm.Namespace, resourceConfigMap, cm.Name, actionDelete, resultSuccess, reasonNone)
-	s.recordKubeEvent(cm.Namespace, resourceConfigMap, cm.Name, action, resultSuccess, reasonNone)
-	slog.Info("kube configmap delete kv", "action", action, "key", key)
-}
-
-func (s *APIServer) handleSecretUpsert(action string, obj interface{}) {
-	sec, ok := obj.(*corev1.Secret)
-	if !ok || sec == nil {
-		slog.Info("kube secret unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
-		return
-	}
-	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
-
-	value, err := kube.ValueFromSecret(sec)
-	if err != nil {
-		s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionPut, resultError, reasonMarshalFailed)
-		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError, reasonMarshalFailed)
-		slog.Error("kube secret marshal failed", "action", action, "key", key, "err", err)
-		return
-	}
-	if value == "" {
-		slog.Info("kube secret empty value, delete kv if exists", "action", action, "key", key)
-		if err := s.deleteIfExists(key); err != nil {
-			s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionDelete, resultError, reasonStorageFailed)
-			s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError, reasonStorageFailed)
-			slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
-			return
-		}
-		s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionDelete, resultSuccess, reasonNone)
-		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess, reasonNone)
-		return
-	}
-
-	if err := s.putIfChangedByRV(key, []byte(value), sec.ResourceVersion); err != nil {
-		s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionPut, resultError, reasonStorageFailed)
-		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError, reasonStorageFailed)
-		slog.Error("kube secret put kv failed", "action", action, "key", key, "err", err)
-		return
-	}
-	s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionPut, resultSuccess, reasonNone)
-	s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess, reasonNone)
-	slog.Info("kube secret kv put",
-		"action", action,
-		"key", key,
-		"rv", sec.ResourceVersion,
-		"value_len", len(value),
-	)
-}
-
-func (s *APIServer) handleSecretDelete(action string, obj interface{}) {
-	sec := extractSecret(obj)
-	if sec == nil {
-		s.recordKVOperation("", resourceSecret, "", actionDelete, resultError, reasonInvalidObject)
-		s.recordKubeEvent("", resourceSecret, "", action, resultError, reasonInvalidObject)
-		slog.Info("kube secret delete unexpected object", "action", action, "type", fmt.Sprintf("%T", obj))
-		return
-	}
-	key := store.KeyFor(sec.Namespace, "secret", sec.Name)
-	if err := s.deleteIfExists(key); err != nil {
-		s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionDelete, resultError, reasonStorageFailed)
-		s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultError, reasonStorageFailed)
-		slog.Error("kube secret delete kv failed", "action", action, "key", key, "err", err)
-		return
-	}
-	s.recordKVOperation(sec.Namespace, resourceSecret, sec.Name, actionDelete, resultSuccess, reasonNone)
-	s.recordKubeEvent(sec.Namespace, resourceSecret, sec.Name, action, resultSuccess, reasonNone)
-	slog.Info("kube secret delete kv", "action", action, "key", key)
-}
-
-func (s *APIServer) recordKubeEvent(namespace, resource, name, action, result, reason string) {
+func (s *APIServer) recordBootstrapSeeded(namespace, result string) {
 	s.metrics.IncCounter(
-		"cfg_distributor_kube_events_total",
-		"Total number of Kubernetes events processed by the distributor.",
+		"cfg_distributor_bootstrap_seeded_total",
+		"Total number of ConfigMaps seeded during bootstrap.",
 		map[string]string{
 			"namespace": namespace,
-			"resource":  resource,
-			"name":      name,
-			"action":    action,
 			"result":    result,
-			"reason":    reason,
 		},
 	)
 }
 
-func (s *APIServer) recordKVOperation(namespace, resource, name, action, result, reason string) {
+func (s *APIServer) recordBootstrapSkipped(namespace, reason string) {
 	s.metrics.IncCounter(
-		"cfg_distributor_kv_operations_total",
-		"Total number of KV operations attempted by the distributor.",
+		"cfg_distributor_bootstrap_skipped_total",
+		"Total number of ConfigMaps skipped during bootstrap.",
 		map[string]string{
 			"namespace": namespace,
-			"resource":  resource,
-			"name":      name,
-			"action":    action,
-			"result":    result,
 			"reason":    reason,
 		},
 	)
-}
-
-func extractConfigMap(obj interface{}) *corev1.ConfigMap {
-	if cm, ok := obj.(*corev1.ConfigMap); ok {
-		return cm
-	}
-	if tomb, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-		if cm, ok := tomb.Obj.(*corev1.ConfigMap); ok {
-			return cm
-		}
-	}
-	return nil
-}
-
-func extractSecret(obj interface{}) *corev1.Secret {
-	if sec, ok := obj.(*corev1.Secret); ok {
-		return sec
-	}
-	if tomb, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-		if sec, ok := tomb.Obj.(*corev1.Secret); ok {
-			return sec
-		}
-	}
-	return nil
-}
-
-// watchResourcesFromConfig normalizes plural resource names from config (e.g. "configmaps")
-// to the singular forms used as KV key components (e.g. "configmap").
-func watchResourcesFromConfig(resources []string) []string {
-	singularOf := map[string]string{
-		"configmaps": "configmap",
-		"secrets":    "secret",
-	}
-	seen := make(map[string]struct{})
-	out := make([]string, 0, len(resources))
-	for _, r := range resources {
-		r = strings.TrimSpace(r)
-		if r == "" {
-			continue
-		}
-		singular, ok := singularOf[r]
-		if !ok {
-			singular = strings.TrimSuffix(r, "s")
-		}
-		if _, dup := seen[singular]; !dup {
-			out = append(out, singular)
-			seen[singular] = struct{}{}
-		}
-	}
-	if len(out) == 0 {
-		return []string{"configmap", "secret"}
-	}
-	return out
 }
 
 func normalizeNamespaces(namespaces []string) []string {

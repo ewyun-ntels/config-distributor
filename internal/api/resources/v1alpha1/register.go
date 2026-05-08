@@ -4,7 +4,7 @@ import (
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
 
-	"ntels.com/upm/cfg-distributor/internal/kube"
+	"ntels.com/upm/cfg-distributor/internal/metrics"
 	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
@@ -19,18 +19,12 @@ func Register(ws *restful.WebService, h *Handler) {
 	ws.Route(ws.POST("/configmap/{name}").To(h.putConfigMap))
 	ws.Route(ws.PUT("/configmap/{name}").To(h.putConfigMap))
 	ws.Route(ws.DELETE("/configmap/{name}").To(h.deleteConfigMap))
-
-	ws.Route(ws.GET("/secret").To(h.listSecrets))
-	ws.Route(ws.GET("/secret/{name}").To(h.getSecret))
-	ws.Route(ws.POST("/secret/{name}").To(h.putSecret))
-	ws.Route(ws.PUT("/secret/{name}").To(h.putSecret))
-	ws.Route(ws.DELETE("/secret/{name}").To(h.deleteSecret))
 }
 
 // AddToContainer registers v1alpha1 resources into the container.
-func AddToContainer(container *restful.Container, kv nats.KeyValue, kubeClient *kube.Client, cache *store.ResourceCache) error {
+func AddToContainer(container *restful.Container, kv nats.KeyValue, cache *store.ResourceCache, registry *metrics.Registry) error {
 	ws := new(restful.WebService)
-	Register(ws, NewHandlerWithDeps(kv, kubeClient, cache))
+	Register(ws, NewHandlerWithDeps(kv, cache, registry))
 	container.Add(ws)
 	return nil
 }

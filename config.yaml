@@ -8,12 +8,13 @@ nats:
   url: nats://10.255.254.22:4222
   bucket: UPM_CONFIG
 
-watch:
+bootstrap:
   namespaces:
     - default
-  resources:
-    - configmaps
-    - secrets
+
+reconciler:
+  enabled: true
+  intervalSeconds: 300
 
 filter:
   managedLabel:

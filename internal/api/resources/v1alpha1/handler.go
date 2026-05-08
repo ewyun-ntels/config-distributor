@@ -1,35 +1,42 @@
 package v1alpha1
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
 
 	restful "github.com/emicklei/go-restful/v3"
 	"github.com/nats-io/nats.go"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"ntels.com/upm/cfg-distributor/internal/kube"
+	"ntels.com/upm/cfg-distributor/internal/metrics"
 	"ntels.com/upm/cfg-distributor/internal/store"
 )
 
+const (
+	resourceConfigMap = "configmap"
+
+	actionPut    = "put"
+	actionDelete = "delete"
+
+	resultSuccess = "success"
+	resultError   = "error"
+
+	reasonNone          = "none"
+	reasonStorageFailed = "storage_failed"
+)
+
 type Handler struct {
-	kv    nats.KeyValue
-	kube  *kube.Client
-	cache *store.ResourceCache
+	kv      nats.KeyValue
+	cache   *store.ResourceCache
+	metrics *metrics.Registry
 }
 
-func NewHandlerWithDeps(kv nats.KeyValue, kubeClient *kube.Client, cache *store.ResourceCache) *Handler {
-	return &Handler{kv: kv, kube: kubeClient, cache: cache}
+func NewHandlerWithDeps(kv nats.KeyValue, cache *store.ResourceCache, registry *metrics.Registry) *Handler {
+	return &Handler{kv: kv, cache: cache, metrics: registry}
 }
 
 func (h *Handler) listConfigMaps(req *restful.Request, resp *restful.Response) {
-	h.listByPrefix(req, resp, "configmap")
-}
-
-func (h *Handler) listSecrets(req *restful.Request, resp *restful.Response) {
-	h.listByPrefix(req, resp, "secret")
+	h.listByPrefix(req, resp, resourceConfigMap)
 }
 
 func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kind string) {
@@ -54,11 +61,7 @@ func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kin
 }
 
 func (h *Handler) getConfigMap(req *restful.Request, resp *restful.Response) {
-	h.getItem(req, resp, "configmap")
-}
-
-func (h *Handler) getSecret(req *restful.Request, resp *restful.Response) {
-	h.getItem(req, resp, "secret")
+	h.getItem(req, resp, resourceConfigMap)
 }
 
 func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind string) {
@@ -101,11 +104,7 @@ func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind str
 }
 
 func (h *Handler) putConfigMap(req *restful.Request, resp *restful.Response) {
-	h.putItem(req, resp, "configmap")
-}
-
-func (h *Handler) putSecret(req *restful.Request, resp *restful.Response) {
-	h.putItem(req, resp, "secret")
+	h.putItem(req, resp, resourceConfigMap)
 }
 
 func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind string) {
@@ -128,44 +127,29 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		return
 	}
 
-	storedValue, k8sRev, err := h.applyToKube(req.Request.Context(), ns, kind, name, data)
+	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), data)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			writeError(resp, http.StatusNotFound, err)
-			return
-		}
+		h.recordKVOperation(ns, kind, name, actionPut, resultError, reasonStorageFailed)
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
-
-	// Update KV/cache in the request path so the API can return the KV revision
-	// immediately and subsequent reads in this process observe the new value
-	// without waiting for the asynchronous informer event.
-	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), []byte(storedValue))
-	if err != nil {
-		writeError(resp, http.StatusInternalServerError, err)
-		return
-	}
+	value := string(data)
 	h.cache.Upsert(ns, kind, name, store.CachedValue{
 		Revision: rev,
-		Value:    storedValue,
+		Value:    value,
 	})
+	h.recordKVOperation(ns, kind, name, actionPut, resultSuccess, reasonNone)
 
 	resp.WriteHeaderAndEntity(http.StatusOK, map[string]any{
-		"namespace":      ns,
-		"kind":           kind,
-		"name":           name,
-		"revision":       rev,
-		"k8sResourceVer": k8sRev,
+		"namespace": ns,
+		"kind":      kind,
+		"name":      name,
+		"revision":  rev,
 	})
 }
 
 func (h *Handler) deleteConfigMap(req *restful.Request, resp *restful.Response) {
-	h.deleteItem(req, resp, "configmap")
-}
-
-func (h *Handler) deleteSecret(req *restful.Request, resp *restful.Response) {
-	h.deleteItem(req, resp, "secret")
+	h.deleteItem(req, resp, resourceConfigMap)
 }
 
 func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind string) {
@@ -176,65 +160,35 @@ func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind 
 		return
 	}
 
-	if err := h.deleteFromKube(req.Request.Context(), ns, kind, name); err != nil {
-		writeError(resp, http.StatusInternalServerError, err)
-		return
-	}
-
 	if err := h.kv.Delete(store.KeyFor(ns, kind, name)); err != nil {
 		if err != nats.ErrKeyNotFound {
+			h.recordKVOperation(ns, kind, name, actionDelete, resultError, reasonStorageFailed)
 			writeError(resp, http.StatusInternalServerError, err)
 			return
 		}
 	}
 	h.cache.Delete(ns, kind, name)
+	h.recordKVOperation(ns, kind, name, actionDelete, resultSuccess, reasonNone)
 
 	resp.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) applyToKube(ctx context.Context, namespace, kind, name string, data []byte) (string, string, error) {
-	if h.kube == nil {
-		return "", "", fmt.Errorf("kube client not configured")
+func (h *Handler) recordKVOperation(namespace, resource, name, action, result, reason string) {
+	if h.metrics == nil {
+		return
 	}
-	value := string(data)
-	switch kind {
-	case "configmap":
-		cm, err := h.kube.UpsertConfigMap(ctx, namespace, name, value)
-		if err != nil {
-			return "", "", err
-		}
-		storedValue, err := kube.ValueFromConfigMap(cm)
-		if err != nil {
-			return "", "", err
-		}
-		return storedValue, cm.ResourceVersion, nil
-	case "secret":
-		sec, err := h.kube.UpsertSecret(ctx, namespace, name, value)
-		if err != nil {
-			return "", "", err
-		}
-		storedValue, err := kube.ValueFromSecret(sec)
-		if err != nil {
-			return "", "", err
-		}
-		return storedValue, sec.ResourceVersion, nil
-	default:
-		return "", "", fmt.Errorf("unsupported kind: %s", kind)
-	}
-}
-
-func (h *Handler) deleteFromKube(ctx context.Context, namespace, kind, name string) error {
-	if h.kube == nil {
-		return fmt.Errorf("kube client not configured")
-	}
-	switch kind {
-	case "configmap":
-		return h.kube.DeleteConfigMap(ctx, namespace, name)
-	case "secret":
-		return h.kube.DeleteSecret(ctx, namespace, name)
-	default:
-		return fmt.Errorf("unsupported kind: %s", kind)
-	}
+	h.metrics.IncCounter(
+		"cfg_distributor_kv_operations_total",
+		"Total number of KV operations attempted by the distributor.",
+		map[string]string{
+			"namespace": namespace,
+			"resource":  resource,
+			"name":      name,
+			"action":    action,
+			"result":    result,
+			"reason":    reason,
+		},
+	)
 }
 
 func writeError(resp *restful.Response, code int, err error) {
