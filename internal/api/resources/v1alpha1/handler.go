@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	restful "github.com/emicklei/go-restful/v3"
@@ -14,6 +15,7 @@ import (
 
 const (
 	resourceConfigMap = "configmap"
+	namespaceAll      = "all"
 
 	actionPut    = "put"
 	actionDelete = "delete"
@@ -39,6 +41,15 @@ func (h *Handler) listConfigMaps(req *restful.Request, resp *restful.Response) {
 	h.listByPrefix(req, resp, resourceConfigMap)
 }
 
+func (h *Handler) listAllConfigMaps(req *restful.Request, resp *restful.Response) {
+	ns := req.PathParameter("namespace")
+	if ns != namespaceAll {
+		writeError(resp, http.StatusBadRequest, fmt.Errorf("namespace must be %q for aggregate list", namespaceAll))
+		return
+	}
+	h.listAllByKind(resp, resourceConfigMap)
+}
+
 func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kind string) {
 	ns := req.PathParameter("namespace")
 
@@ -52,11 +63,31 @@ func (h *Handler) listByPrefix(req *restful.Request, resp *restful.Response, kin
 			Value:     item.Value,
 		})
 	}
+	slog.Debug("list resources from cache", "namespace", ns, "kind", kind, "items", len(items))
 
 	resp.WriteHeaderAndEntity(http.StatusOK, listResponse{
 		Namespace: ns,
 		Kind:      kind,
 		Items:     items,
+	})
+}
+
+func (h *Handler) listAllByKind(resp *restful.Response, kind string) {
+	items := make([]itemResponse, 0)
+	for _, item := range h.cache.ListAll(kind) {
+		items = append(items, itemResponse{
+			Namespace: item.Namespace,
+			Kind:      kind,
+			Name:      item.Name,
+			Revision:  item.Revision,
+			Value:     item.Value,
+		})
+	}
+	slog.Debug("list all resources from cache", "kind", kind, "items", len(items))
+
+	resp.WriteHeaderAndEntity(http.StatusOK, listResponse{
+		Kind:  kind,
+		Items: items,
 	})
 }
 
@@ -74,6 +105,7 @@ func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind str
 
 	item, ok := h.cache.Get(ns, kind, name)
 	if ok {
+		slog.Debug("get resource from cache", "namespace", ns, "kind", kind, "name", name, "revision", item.Revision)
 		resp.WriteHeaderAndEntity(http.StatusOK, itemResponse{
 			Namespace: ns,
 			Kind:      kind,
@@ -87,13 +119,16 @@ func (h *Handler) getItem(req *restful.Request, resp *restful.Response, kind str
 	entry, err := h.kv.Get(store.KeyFor(ns, kind, name))
 	if err != nil {
 		if err == nats.ErrKeyNotFound {
+			slog.Debug("resource not found in kv", "namespace", ns, "kind", kind, "name", name)
 			writeError(resp, http.StatusNotFound, err)
 			return
 		}
+		slog.Debug("get resource from kv failed", "namespace", ns, "kind", kind, "name", name, "err", err)
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
 
+	slog.Debug("get resource from kv", "namespace", ns, "kind", kind, "name", name, "revision", entry.Revision())
 	resp.WriteHeaderAndEntity(http.StatusOK, itemResponse{
 		Namespace: ns,
 		Kind:      kind,
@@ -130,6 +165,7 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 	rev, err := h.kv.Put(store.KeyFor(ns, kind, name), data)
 	if err != nil {
 		h.recordKVOperation(ns, kind, name, actionPut, resultError, reasonStorageFailed)
+		slog.Debug("put resource failed", "namespace", ns, "kind", kind, "name", name, "bytes", len(data), "err", err)
 		writeError(resp, http.StatusInternalServerError, err)
 		return
 	}
@@ -139,6 +175,7 @@ func (h *Handler) putItem(req *restful.Request, resp *restful.Response, kind str
 		Value:    value,
 	})
 	h.recordKVOperation(ns, kind, name, actionPut, resultSuccess, reasonNone)
+	slog.Debug("put resource", "namespace", ns, "kind", kind, "name", name, "revision", rev, "bytes", len(data))
 
 	resp.WriteHeaderAndEntity(http.StatusOK, map[string]any{
 		"namespace": ns,
@@ -163,12 +200,15 @@ func (h *Handler) deleteItem(req *restful.Request, resp *restful.Response, kind 
 	if err := h.kv.Delete(store.KeyFor(ns, kind, name)); err != nil {
 		if err != nats.ErrKeyNotFound {
 			h.recordKVOperation(ns, kind, name, actionDelete, resultError, reasonStorageFailed)
+			slog.Debug("delete resource failed", "namespace", ns, "kind", kind, "name", name, "err", err)
 			writeError(resp, http.StatusInternalServerError, err)
 			return
 		}
+		slog.Debug("delete resource ignored missing key", "namespace", ns, "kind", kind, "name", name)
 	}
 	h.cache.Delete(ns, kind, name)
 	h.recordKVOperation(ns, kind, name, actionDelete, resultSuccess, reasonNone)
+	slog.Debug("delete resource", "namespace", ns, "kind", kind, "name", name)
 
 	resp.WriteHeader(http.StatusNoContent)
 }

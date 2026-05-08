@@ -141,6 +141,7 @@ curl -X PUT http://localhost:8080/namespaces/default/configmap/appA \
 
 curl http://localhost:8080/namespaces/default/configmap/appA
 curl http://localhost:8080/namespaces/default/configmap
+curl http://localhost:8080/namespaces/all/configmaps
 ```
 
 ## 가용성
@@ -291,7 +292,7 @@ preloadCacheFromKV():
         cache.Upsert(ns, kind, name, {Revision: entry.Revision(), Value: string(entry.Value())})
 ```
 - `Run()` 흐름: `bootstrapIfNeeded` → `preloadCacheFromKV` → HTTP 서버 시작
-- LIST(`listByPrefix`)는 변경 없이 cache만 봐도 됨 (preload로 채워졌으니 누락 없음)
+- namespace LIST(`listByPrefix`)와 전체 LIST(`/namespaces/all/configmaps`)는 cache만 봐도 됨 (preload로 채워졌으니 누락 없음)
 
 ### 2-4. 핸들러 단순화
 [internal/api/resources/v1alpha1/handler.go](internal/api/resources/v1alpha1/handler.go):

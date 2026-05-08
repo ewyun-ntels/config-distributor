@@ -6,6 +6,18 @@ info:
 servers:
   - url: http://localhost:8080
 paths:
+  /namespaces/all/configmaps:
+    get:
+      summary: List ConfigMaps across all namespaces from the local KV cache
+      responses:
+        "200":
+          description: List of ConfigMap values across all namespaces
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /namespaces/{namespace}/configmap:
     get:
       summary: List ConfigMaps from the local KV cache

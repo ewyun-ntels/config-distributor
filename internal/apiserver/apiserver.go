@@ -313,6 +313,6 @@ func ensureKV(js nats.JetStreamContext, bucketName string) (nats.KeyValue, error
 	}
 	return js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:  bucketName,
-		History: 5,
+		History: 3,
 	})
 }

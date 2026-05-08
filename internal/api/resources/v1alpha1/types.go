@@ -9,7 +9,7 @@ type itemResponse struct {
 }
 
 type listResponse struct {
-	Namespace string         `json:"namespace"`
+	Namespace string         `json:"namespace,omitempty"`
 	Kind      string         `json:"kind"`
 	Items     []itemResponse `json:"items"`
 }

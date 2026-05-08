@@ -45,6 +45,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 	if r.interval <= 0 {
 		r.interval = 5 * time.Minute
 	}
+	slog.Debug("reconciler started", "interval", r.interval)
 
 	r.runOnce(ctx, kubeClient)
 
@@ -62,9 +63,11 @@ func (r *Reconciler) Run(ctx context.Context) {
 }
 
 func (r *Reconciler) runOnce(ctx context.Context, kubeClient *kube.Client) {
+	slog.Debug("reconciler run started")
 	keys, err := r.kv.Keys()
 	if err == nats.ErrNoKeysFound {
 		r.recordRun(resultSuccess)
+		slog.Debug("reconciler run completed", "result", resultSuccess, "keys", 0, "actions", 0)
 		return
 	}
 	if err != nil {
@@ -74,12 +77,15 @@ func (r *Reconciler) runOnce(ctx context.Context, kubeClient *kube.Client) {
 	}
 
 	hasError := false
+	actions := 0
 	for _, key := range keys {
 		if key == store.BootstrapSentinelKey {
+			slog.Debug("reconciler skipped sentinel key", "key", key)
 			continue
 		}
 		namespace, kind, name, ok := store.ParseKey(key)
 		if !ok || kind != "configmap" {
+			slog.Debug("reconciler skipped unsupported key", "key", key)
 			continue
 		}
 
@@ -97,6 +103,7 @@ func (r *Reconciler) runOnce(ctx context.Context, kubeClient *kube.Client) {
 		if err != nil {
 			if action != "" {
 				r.recordAction(namespace, string(action), resultError)
+				actions++
 			}
 			if action == kube.ConfigMapActionConflict {
 				slog.Warn("reconciler skipped unmanaged configmap conflict",
@@ -116,13 +123,22 @@ func (r *Reconciler) runOnce(ctx context.Context, kubeClient *kube.Client) {
 			continue
 		}
 		r.recordAction(namespace, string(action), resultSuccess)
+		actions++
+		slog.Debug("reconciler applied configmap",
+			"namespace", namespace,
+			"name", name,
+			"action", action,
+			"revision", entry.Revision(),
+		)
 	}
 
 	if hasError {
 		r.recordRun(resultError)
+		slog.Debug("reconciler run completed", "result", resultError, "keys", len(keys), "actions", actions)
 		return
 	}
 	r.recordRun(resultSuccess)
+	slog.Debug("reconciler run completed", "result", resultSuccess, "keys", len(keys), "actions", actions)
 }
 
 func (r *Reconciler) recordRun(result string) {

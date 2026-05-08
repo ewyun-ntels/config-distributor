@@ -1,11 +1,11 @@
 log:
-  level: info
+  level: debug
 
 server:
   port: 8080
 
 nats:
-  url: nats://10.255.254.22:4222
+  url: nats://10.255.254.22:30422
   bucket: UPM_CONFIG
 
 bootstrap:
@@ -16,7 +16,7 @@ bootstrap:
 
 reconciler:
   enabled: true
-  intervalSeconds: 300
+  intervalSeconds: 30
 
 filter:
   managedLabel:

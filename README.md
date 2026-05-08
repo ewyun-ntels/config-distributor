@@ -48,6 +48,7 @@ curl -X PUT http://localhost:8080/namespaces/default/configmap/appA \\
 
 curl http://localhost:8080/namespaces/default/configmap/appA
 curl http://localhost:8080/namespaces/default/configmap
+curl http://localhost:8080/namespaces/all/configmaps
 ```
 
 핵심

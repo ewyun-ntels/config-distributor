@@ -16,6 +16,12 @@ type NamedValue struct {
 	CachedValue
 }
 
+type ResourceValue struct {
+	Namespace string
+	Name      string
+	CachedValue
+}
+
 type ResourceCache struct {
 	mu   sync.RWMutex
 	data map[string]map[string]map[string]CachedValue
@@ -105,6 +111,33 @@ func (c *ResourceCache) List(namespace, kind string) []NamedValue {
 		})
 	}
 	slices.SortFunc(items, func(a, b NamedValue) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return items
+}
+
+func (c *ResourceCache) ListAll(kind string) []ResourceValue {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	items := make([]ResourceValue, 0)
+	for namespace, kindMap := range c.data {
+		nameMap, ok := kindMap[kind]
+		if !ok {
+			continue
+		}
+		for name, value := range nameMap {
+			items = append(items, ResourceValue{
+				Namespace:   namespace,
+				Name:        name,
+				CachedValue: value,
+			})
+		}
+	}
+	slices.SortFunc(items, func(a, b ResourceValue) int {
+		if cmp := strings.Compare(a.Namespace, b.Namespace); cmp != 0 {
+			return cmp
+		}
 		return strings.Compare(a.Name, b.Name)
 	})
 	return items

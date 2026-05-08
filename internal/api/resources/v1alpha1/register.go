@@ -15,6 +15,7 @@ func Register(ws *restful.WebService, h *Handler) {
 		Produces(restful.MIME_JSON, "text/plain")
 
 	ws.Route(ws.GET("/configmap").To(h.listConfigMaps))
+	ws.Route(ws.GET("/configmaps").To(h.listAllConfigMaps))
 	ws.Route(ws.GET("/configmap/{name}").To(h.getConfigMap))
 	ws.Route(ws.POST("/configmap/{name}").To(h.putConfigMap))
 	ws.Route(ws.PUT("/configmap/{name}").To(h.putConfigMap))

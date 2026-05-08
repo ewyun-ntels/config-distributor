@@ -33,6 +33,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: logLevel,
 	})))
+	slog.Debug("logging configured", "level", cfg.Log.Level)
 
 	srv, err := apiserver.New(cfg)
 	if err != nil {
