@@ -4,6 +4,17 @@
 - Config Distributor: K8s ConfigMap/CRD 변경을 KV에 반영 (REST API)
 - Pod: KV에서 현재값 스냅샷 + 변경 이벤트 Watch
 
+설계 기준
+- Kubernetes가 source of truth
+- Config Distributor가 단일 writer로서 K8s의 현재 상태를 NATS JetStream KV에 반영
+- 다른 Pod는 KV를 읽어 현재값과 변경 이벤트를 수신
+
+시작 동작
+- Distributor는 시작 시 Kubernetes informer cache를 동기화한 뒤 현재 최종 상태로 KV를 reconcile하고, 이후 변경은 watch로 계속 반영
+
+메트릭
+- `/metrics`에서 Kubernetes 이벤트 처리와 KV 작업 결과를 Prometheus 텍스트 포맷으로 노출
+
 요구 사항
 - JetStream 활성화된 NATS 서버
 

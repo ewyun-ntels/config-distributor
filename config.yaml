@@ -1,0 +1,21 @@
+log:
+  level: info
+
+server:
+  port: 8080
+
+nats:
+  url: nats://10.255.254.22:4222
+  bucket: UPM_CONFIG
+
+watch:
+  namespaces:
+    - default
+  resources:
+    - configmaps
+    - secrets
+
+filter:
+  managedLabel:
+    key: config.upm.io/managed
+    value: "true"

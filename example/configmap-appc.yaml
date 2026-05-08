@@ -1,12 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: appa
-  namespace: default
+  name: appc
+  namespace: upm-app
   labels:
     config.upm.io/managed: "true"
 data:
   config.json: |
     {
-      "app": "appAbbfdfdfd"
+      "app": "appfdsfsdfsdfsdAbbfdfdfd"
     }

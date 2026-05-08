@@ -65,6 +65,9 @@ paths:
       requestBody:
         required: true
         content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigMapPayload"
           text/plain:
             schema:
               type: string
@@ -76,6 +79,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -96,6 +101,9 @@ paths:
       requestBody:
         required: true
         content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfigMapPayload"
           text/plain:
             schema:
               type: string
@@ -107,6 +115,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -127,8 +137,6 @@ paths:
       responses:
         "204":
           description: Deleted
-        "404":
-          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
   /namespaces/{namespace}/secret:
@@ -190,10 +198,13 @@ paths:
       requestBody:
         required: true
         content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecretPayload"
           text/plain:
             schema:
               type: string
-              example: "password=supersecret"
+              example: "supersecret"
       responses:
         "200":
           description: Result
@@ -201,6 +212,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -221,10 +234,13 @@ paths:
       requestBody:
         required: true
         content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SecretPayload"
           text/plain:
             schema:
               type: string
-              example: "password=supersecret"
+              example: "supersecret"
       responses:
         "200":
           description: Result
@@ -232,6 +248,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
         "500":
@@ -252,12 +270,23 @@ paths:
       responses:
         "204":
           description: Deleted
-        "404":
-          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
 components:
   schemas:
+    ConfigMapPayload:
+      type: object
+      additionalProperties:
+        type: string
+      example:
+        app: appA
+        version: "1"
+    SecretPayload:
+      type: object
+      additionalProperties:
+        type: string
+      example:
+        password: supersecret
     ItemResponse:
       type: object
       properties:
@@ -309,6 +338,12 @@ components:
         error:
           type: string
   responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     NotFound:
       description: Not found
       content:

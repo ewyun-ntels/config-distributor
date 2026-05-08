@@ -1,73 +1,225 @@
-<mxfile host="app.diagrams.net" modified="2026-03-19T00:00:00.000Z" agent="Codex" version="24.7.17">
+<mxfile host="app.diagrams.net" modified="2026-03-20T00:00:00.000Z" agent="Codex" version="24.7.17">
   <diagram id="jetstream-kv-config-simple" name="Page-1">
-    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+    <mxGraphModel dx="1600" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1000" math="0" shadow="0">
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="title" value="jetstream_kv_config simple architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=24;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="title" value="cfg-distributor runtime architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=24;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="40" y="20" width="420" height="30" as="geometry"/>
         </mxCell>
+        <mxCell id="subtitle" value="startup reconcile + informer events + single-writer KV distribution + metrics" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=14;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="55" width="520" height="20" as="geometry"/>
+        </mxCell>
         <mxCell id="client" value="External Client&#xa;curl / app / operator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;" vertex="1" parent="1">
-          <mxGeometry x="40" y="150" width="180" height="80" as="geometry"/>
+          <mxGeometry x="40" y="180" width="180" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="prom" value="Prometheus / Monitor&#xa;scrape /metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="180" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="consumer" value="Consumer Pod / App&#xa;KV snapshot + watch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=16;" vertex="1" parent="1">
-          <mxGeometry x="1230" y="150" width="220" height="80" as="geometry"/>
+          <mxGeometry x="1500" y="180" width="220" height="80" as="geometry"/>
         </mxCell>
         <mxCell id="cluster" value="Kubernetes Cluster" style="swimlane;html=1;rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontSize=18;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="260" y="80" width="900" height="520" as="geometry"/>
+          <mxGeometry x="260" y="100" width="980" height="700" as="geometry"/>
         </mxCell>
-        <mxCell id="service" value="Service&#xa;ClusterIP :8080" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="cluster">
-          <mxGeometry x="40" y="70" width="170" height="70" as="geometry"/>
+        <mxCell id="service" value="Service&#xa;ClusterIP :8080&#xa;/healthz /metrics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="cluster">
+          <mxGeometry x="40" y="70" width="190" height="90" as="geometry"/>
         </mxCell>
-        <mxCell id="deployment" value="Deployment / Pod&#xa;cfg-distributor&#xa;&#xa;go-restful API&#xa;startup sync&#xa;shared informers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=15;" vertex="1" parent="cluster">
-          <mxGeometry x="270" y="50" width="250" height="150" as="geometry"/>
+        <mxCell id="deployment" value="Deployment / Pod&#xa;cfg-distributor&#xa;&#xa;go-restful API&#xa;NATS JetStream client&#xa;ResourceCache&#xa;metrics registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=15;" vertex="1" parent="cluster">
+          <mxGeometry x="280" y="40" width="270" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="startup" value="Startup Sequence&#xa;1. start shared informers&#xa;2. WaitForCacheSync&#xa;3. reconcile from informer store&#xa;4. delete stale KV keys" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;" vertex="1" parent="cluster">
+          <mxGeometry x="280" y="230" width="270" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="cache" value="In-Memory ResourceCache&#xa;latest value + revision&#xa;used by list/get API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="cluster">
+          <mxGeometry x="280" y="440" width="270" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="metrics" value="Metrics&#xa;cfg_distributor_kube_events_total&#xa;cfg_distributor_kv_operations_total" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;" vertex="1" parent="cluster">
+          <mxGeometry x="280" y="570" width="270" height="110" as="geometry"/>
         </mxCell>
         <mxCell id="rbac" value="ServiceAccount + ClusterRole&#xa;get/list/watch/create/update/delete&#xa;configmaps, secrets" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;" vertex="1" parent="cluster">
-          <mxGeometry x="550" y="50" width="270" height="90" as="geometry"/>
+          <mxGeometry x="600" y="40" width="280" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="kubeapi" value="Kubernetes API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;" vertex="1" parent="cluster">
-          <mxGeometry x="610" y="190" width="180" height="70" as="geometry"/>
+          <mxGeometry x="690" y="170" width="180" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="informers" value="Shared Informers&#xa;ConfigMaps + Secrets&#xa;Add / Update / Delete handlers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="cluster">
+          <mxGeometry x="640" y="280" width="280" height="100" as="geometry"/>
         </mxCell>
         <mxCell id="resources" value="Managed Resources&#xa;ConfigMaps / Secrets&#xa;label: config.upm.io/managed=true" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="cluster">
-          <mxGeometry x="590" y="320" width="220" height="100" as="geometry"/>
+          <mxGeometry x="670" y="430" width="220" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="syncnote" value="Initial list + continuous watch&#xa;skip unmanaged or empty values" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#ffffff;strokeColor=#999999;fontSize=14;" vertex="1" parent="cluster">
-          <mxGeometry x="320" y="300" width="210" height="70" as="geometry"/>
+        <mxCell id="reconcileNote" value="No event history replay&#xa;startup restores final state only&#xa;informer events handle changes after startup" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=#ffffff;strokeColor=#999999;fontSize=14;" vertex="1" parent="cluster">
+          <mxGeometry x="620" y="570" width="320" height="90" as="geometry"/>
         </mxCell>
         <mxCell id="nats" value="NATS JetStream" style="swimlane;html=1;rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="930" y="120" width="320" height="260" as="geometry"/>
+          <mxGeometry x="1260" y="120" width="360" height="430" as="geometry"/>
         </mxCell>
         <mxCell id="kvbucket" value="KV Bucket&#xa;UPM_CONFIG&#xa;&#xa;key: namespaces/&lt;ns&gt;/&lt;kind&gt;/&lt;name&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=15;" vertex="1" parent="nats">
-          <mxGeometry x="35" y="60" width="250" height="90" as="geometry"/>
+          <mxGeometry x="45" y="60" width="270" height="90" as="geometry"/>
         </mxCell>
-        <mxCell id="metabucket" value="Meta KV Bucket&#xa;UPM_CONFIG_META&#xa;&#xa;stores resourceVersion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=15;" vertex="1" parent="nats">
-          <mxGeometry x="35" y="165" width="250" height="70" as="geometry"/>
+        <mxCell id="metabucket" value="Stored Value Envelope&#xa;payload + metadata + resourceVersion&#xa;used for duplicate-write check" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=15;" vertex="1" parent="nats">
+          <mxGeometry x="45" y="170" width="270" height="80" as="geometry"/>
         </mxCell>
-        <mxCell id="flow1" value="HTTP GET/PUT/POST/DELETE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="client" target="service">
+        <mxCell id="flow1" value="HTTP API&#xa;GET / PUT / DELETE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="client" target="service">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
         <mxCell id="flow2" value="routes to pod" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="service" target="deployment">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow3" value="CRUD via handler" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="deployment" target="kubeapi">
+        <mxCell id="flow3" value="scrape metrics" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="prom" target="service">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow4" value="list/watch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="kubeapi" target="resources">
+        <mxCell id="flow4" value="CRUD + list/watch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="deployment" target="kubeapi">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow5" value="startup sync + informer events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="resources" target="deployment">
+        <mxCell id="flow5" value="RBAC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="cluster" source="rbac" target="kubeapi">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow6" value="Put/Delete config values" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="deployment" target="kvbucket">
+        <mxCell id="flow6" value="list/watch source" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="kubeapi" target="informers">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow7" value="save last resourceVersion" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="deployment" target="metabucket">
+        <mxCell id="flow7" value="cache sync + event handlers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="informers" target="startup">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow8" value="snapshot + watch events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="kvbucket" target="consumer">
+        <mxCell id="flow8" value="current managed state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="resources" target="startup">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
-        <mxCell id="flow9" value="RBAC" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="cluster" source="rbac" target="kubeapi">
+        <mxCell id="flow9" value="upsert / delete cache" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="cluster" source="startup" target="cache">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow10" value="record event/KV success/failure" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="cluster" source="deployment" target="metrics">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow11" value="PUT / DELETE config values" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="deployment" target="kvbucket">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow12" value="embed resourceVersion in value" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="deployment" target="metabucket">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow15" value="snapshot + watch events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="kvbucket" target="consumer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="flow16" value="reconcile compares desired keys&#xa;and deletes stale KV entries" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="startup" target="kvbucket">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="jetstream-kv-config-detail" name="Sync-Detail">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2200" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="d2-title" value="cfg-distributor detailed sync flow" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=24;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="500" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-subtitle" value="Kubernetes is the source of managed resources, cfg-distributor is the single KV writer, and NATS KV is the distribution store for downstream readers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;fontSize=14;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="40" y="55" width="980" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-cluster" value="Kubernetes Cluster" style="swimlane;html=1;rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="100" width="980" height="1180" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-ns" value="Namespace(default or configured)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="40" y="60" width="260" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-managed" value="Managed ConfigMap / Secret&#xa;label: config.upm.io/managed=true&#xa;actual resource data lives here" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=16;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="40" y="160" width="320" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-kubeapi" value="Kubernetes API Server" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="410" y="180" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-distributor" value="cfg-distributor Pod&#xa;&#xa;go-restful handlers&#xa;kube client&#xa;JetStream client&#xa;ResourceCache&#xa;metrics registry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=16;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="700" y="120" width="230" height="160" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-shared" value="Shared Informers&#xa;ConfigMaps / Secrets&#xa;Add Update Delete handlers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="380" y="340" width="280" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-reconcile" value="Startup Reconcile&#xa;1. start informers&#xa;2. WaitForCacheSync&#xa;3. read informer store&#xa;4. keep only managed resources&#xa;5. write final state to KV&#xa;6. delete stale KV keys" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="380" y="500" width="300" height="180" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-kubeevents" value="Runtime K8s Event Path&#xa;Add/Update: serialize resource -&gt; putIfChangedByRV&#xa;Delete: deleteIfExists" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="380" y="740" width="300" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-apiwrite" value="Runtime API Write Path&#xa;PUT/DELETE handler&#xa;1. apply to Kubernetes&#xa;2. put/delete NATS KV&#xa;3. update local cache immediately" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="380" y="920" width="300" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-cache" value="ResourceCache&#xa;namespace + kind + name&#xa;latest value + revision&#xa;used by list/get APIs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=15;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="720" y="980" width="210" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-metrics" value="Metrics&#xa;kube events total&#xa;kv operations total" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;" vertex="1" parent="d2-cluster">
+          <mxGeometry x="720" y="1130" width="210" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-nats" value="NATS JetStream" style="swimlane;html=1;rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="100" width="520" height="920" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-kv" value="KV Bucket: UPM_CONFIG&#xa;key = namespaces/&lt;ns&gt;/&lt;kind&gt;/&lt;name&gt;&#xa;value = stored payload + metadata + resourceVersion&#xa;consumed by downstream apps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=16;" vertex="1" parent="d2-nats">
+          <mxGeometry x="40" y="70" width="330" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-meta" value="Embedded ResourceVersion&#xa;stored inside each KV value&#xa;used to skip duplicate writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=15;" vertex="1" parent="d2-nats">
+          <mxGeometry x="40" y="230" width="330" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-consumer" value="Downstream Consumer / App&#xa;KeyValue(bucket) + Watch(prefix)&#xa;receives snapshot and later changes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1710" y="180" width="300" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-client" value="External Client&#xa;GET/LIST/PUT/DELETE via HTTP" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1110" y="1080" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-readapi" value="Read API Behavior&#xa;LIST/GET prefers ResourceCache&#xa;falls back to KV get/keys if cache absent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="1080" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e1" value="list/watch + CRUD" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-kubeapi" target="d2-distributor">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e2" value="actual objects" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-managed" target="d2-kubeapi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e3" value="watch source" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-kubeapi" target="d2-shared">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e4" value="sync then enumerate store" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-shared" target="d2-reconcile">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e5" value="live Add/Update/Delete" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-shared" target="d2-kubeevents">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e6" value="startup put/delete" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-reconcile" target="d2-kv">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e7" value="embed resourceVersion in value" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-reconcile" target="d2-meta">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e8" value="upsert/delete during runtime" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-kubeevents" target="d2-kv">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e9" value="compare embedded RV" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-kubeevents" target="d2-meta">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e12" value="update cache on K8s events" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-kubeevents" target="d2-cache">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e13" value="same data plane for consumers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-kv" target="d2-consumer">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e14" value="HTTP PUT/DELETE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-client" target="d2-apiwrite">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e15" value="apply changes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-apiwrite" target="d2-kubeapi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e16" value="write/delete mirrored value" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-apiwrite" target="d2-kv">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e17" value="fast local update" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-apiwrite" target="d2-cache">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e18" value="serve GET/LIST" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-cache" target="d2-readapi">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e19" value="observes counters" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="d2-cluster" source="d2-distributor" target="d2-metrics">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2-e20" value="update cache during startup reconcile" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="d2-reconcile" target="d2-cache">
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
       </root>
