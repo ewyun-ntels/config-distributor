@@ -11,6 +11,8 @@ nats:
 bootstrap:
   namespaces:
     - default
+    - upm-app
+    - upm-ems
 
 reconciler:
   enabled: true

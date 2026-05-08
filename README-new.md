@@ -35,6 +35,7 @@ REST API 쓰기 경로와 분리된 백그라운드 워커. 주기적으로 KV�
 - **드리프트 보정**: 누군가 ConfigMap을 직접 수정해도 다음 사이클에 KV 값으로 복원
 - **신규 ConfigMap 자동 생성**: REST API로 새 키가 KV에 들어오면 다음 사이클에 ConfigMap 생성 (관리 라벨 자동 부착)
 - **단일 키 계약 유지**: ConfigMap 생성 시 `data: { value: <KV value> }` 형태로 단일 키 사용
+- **namespace 기준**: reconciler는 `bootstrap.namespaces`를 순회하지 않고, KV key(`namespaces/{namespace}/configmap/{name}`)에 들어있는 namespace를 그대로 사용
 
 → "운영 중 새 config 추가" 시나리오는 REST API 호출 한 번이면 충족. ConfigMap은 reconciler가 알아서 만들어줌.
 
@@ -94,6 +95,7 @@ bootstrap 대상 ConfigMap은 **`data`에 단일 키만** 가져야 합니다.
 - **reconciler**: 관리 라벨이 붙은 ConfigMap을 update할 때 키 이름을 **`value`로 정규화**
   - 예: 기존 ConfigMap이 `data: { application.yaml: "..." }` 였더라도 reconciler가 한 번 update하면 `data: { value: "..." }` 형태로 바뀜
   - 정규화는 의도된 동작. 운영 단계에서는 모든 관리 ConfigMap이 `data.value` 키 사용으로 통일됨
+  - 같은 namespace/name의 비관리 ConfigMap이 이미 있으면 덮어쓰지 않고 conflict metric/log만 남김
 
 ### 값 표현 범위 (text config 전제)
 
@@ -352,7 +354,7 @@ filter:
   - `cfg_distributor_bootstrap_seeded_total{namespace,result}`
   - `cfg_distributor_bootstrap_skipped_total{namespace,reason}` (`multi_key_or_empty` 등)
   - `cfg_distributor_reconciler_runs_total{result}` (`success` / `error` / `disabled` — disabled는 kube client 생성 실패로 영구 비활성화된 경우 1회 기록)
-  - `cfg_distributor_reconciler_actions_total{namespace,action,result}` (action: `create`/`update`/`noop` — delete는 미지원)
+  - `cfg_distributor_reconciler_actions_total{namespace,action,result}` (action: `create`/`update`/`noop`/`conflict` — delete는 미지원)
 
 > 현재 [metrics.go](internal/metrics/metrics.go)는 counter만 지원하므로 1차 구현 범위를 작게 유지하기 위해 gauge(`bootstrap_status`, reconciler `last_run_timestamp`, drift 키 개수 등)는 제외. 필요해지면 metrics 패키지에 gauge 지원을 추가하면서 함께 도입.
 
@@ -392,6 +394,7 @@ runOnce(ctx):
         value := string(entry.Value())
 
         // Get → 없으면 Create, 있고 단일 키 값이 다르면 Update, 같으면 noop
+        // 같은 namespace/name의 비관리 ConfigMap이 있으면 conflict로 기록하고 skip
         // 실패 시 로그 + metric, 다음 키 계속 (best-effort, 다음 사이클에서 재시도)
         kubeClient.UpsertConfigMapSingleKey(ctx, ns, name, value)
 
@@ -399,7 +402,8 @@ runOnce(ctx):
 ```
 - `kube.Client`에 `UpsertConfigMapSingleKey(ctx, ns, name, value)` 헬퍼 추가 (단일 키 계약 + 관리 라벨 자동 부착, 변경 없으면 API 호출 생략)
 - 기존 `UpsertConfigMap`을 단일 키 계약에 맞게 재작성 또는 위 헬퍼로 대체
-- 외부 다중 키 ConfigMap은 reconciler가 관여하지 않음 (단일 키만 관리)
+- reconciler는 KV key의 namespace를 그대로 사용하므로, REST API로 `bootstrap.namespaces` 외 namespace에 쓴 값도 미러링 대상이 됨
+- 비관리 ConfigMap conflict는 덮어쓰지 않음. action=`conflict`, result=`error`로 기록하고 run 자체는 계속 진행
 - **삭제 로직 없음** (의도적 단순화 — 위 "삭제 처리(제한사항)" 섹션 참조)
 
 > reconciler는 `cmd/distributor/main.go` 또는 `apiserver.Run()`에서 별도 goroutine으로 시작. 컨텍스트 취소로 정상 종료.

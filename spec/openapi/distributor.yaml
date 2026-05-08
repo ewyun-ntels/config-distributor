@@ -2,22 +2,18 @@ openapi: 3.0.3
 info:
   title: Config Distributor API
   version: "0.1.0"
-  description: REST API for distributing ConfigMap/Secret values via JetStream KV
+  description: REST API for storing ConfigMap values in NATS JetStream KV.
 servers:
   - url: http://localhost:8080
 paths:
   /namespaces/{namespace}/configmap:
     get:
-      summary: List ConfigMaps (from KV cache)
+      summary: List ConfigMaps from the local KV cache
       parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Namespace"
       responses:
         "200":
-          description: List of ConfigMaps
+          description: List of ConfigMap values
           content:
             application/json:
               schema:
@@ -26,18 +22,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /namespaces/{namespace}/configmap/{name}:
     get:
-      summary: Get ConfigMap (from KV cache)
+      summary: Get a ConfigMap value from the local cache or KV
       parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
       responses:
         "200":
           description: ConfigMap value
@@ -50,243 +38,79 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
     post:
-      summary: Create or update ConfigMap (applies to K8s, then KV)
+      summary: Store raw text value in KV
       parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ConfigMapPayload"
-          text/plain:
-            schema:
-              type: string
-              example: "app: appA\nversion: 1\n"
+        $ref: "#/components/requestBodies/RawConfigValue"
       responses:
         "200":
-          description: Result
+          description: KV write result
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
     put:
-      summary: Create or update ConfigMap (applies to K8s, then KV)
+      summary: Store raw text value in KV
       parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
       requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ConfigMapPayload"
-          text/plain:
-            schema:
-              type: string
-              example: "app: appA\nversion: 1\n"
+        $ref: "#/components/requestBodies/RawConfigValue"
       responses:
         "200":
-          description: Result
+          description: KV write result
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/WriteResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/ServerError"
     delete:
-      summary: Delete ConfigMap (applies to K8s, then KV)
+      summary: Delete ConfigMap value from KV
+      description: The periodic ConfigMap mirror is not deleted automatically.
       parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
+        - $ref: "#/components/parameters/Namespace"
+        - $ref: "#/components/parameters/Name"
       responses:
         "204":
-          description: Deleted
-        "500":
-          $ref: "#/components/responses/ServerError"
-  /namespaces/{namespace}/secret:
-    get:
-      summary: List Secrets (from KV cache)
-      parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: List of Secrets
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ListResponse"
-        "500":
-          $ref: "#/components/responses/ServerError"
-  /namespaces/{namespace}/secret/{name}:
-    get:
-      summary: Get Secret (from KV cache)
-      parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Secret value
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ItemResponse"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-    post:
-      summary: Create or update Secret (applies to K8s, then KV)
-      parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SecretPayload"
-          text/plain:
-            schema:
-              type: string
-              example: "supersecret"
-      responses:
-        "200":
-          description: Result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/WriteResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-    put:
-      summary: Create or update Secret (applies to K8s, then KV)
-      parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SecretPayload"
-          text/plain:
-            schema:
-              type: string
-              example: "supersecret"
-      responses:
-        "200":
-          description: Result
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/WriteResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "500":
-          $ref: "#/components/responses/ServerError"
-    delete:
-      summary: Delete Secret (applies to K8s, then KV)
-      parameters:
-        - name: namespace
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: name
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "204":
-          description: Deleted
+          description: Deleted from KV
         "500":
           $ref: "#/components/responses/ServerError"
 components:
+  parameters:
+    Namespace:
+      name: namespace
+      in: path
+      required: true
+      schema:
+        type: string
+    Name:
+      name: name
+      in: path
+      required: true
+      schema:
+        type: string
+  requestBodies:
+    RawConfigValue:
+      required: true
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: "app: appA\nversion: 1\n"
+        application/json:
+          schema:
+            type: string
+            example: "{\"app\":\"appA\",\"version\":\"1\"}"
   schemas:
-    ConfigMapPayload:
-      type: object
-      additionalProperties:
-        type: string
-      example:
-        app: appA
-        version: "1"
-    SecretPayload:
-      type: object
-      additionalProperties:
-        type: string
-      example:
-        password: supersecret
     ItemResponse:
       type: object
       properties:
@@ -294,6 +118,7 @@ components:
           type: string
         kind:
           type: string
+          example: configmap
         name:
           type: string
         revision:
@@ -308,6 +133,7 @@ components:
           type: string
         kind:
           type: string
+          example: configmap
         items:
           type: array
           items:
@@ -319,19 +145,12 @@ components:
           type: string
         kind:
           type: string
+          example: configmap
         name:
           type: string
         revision:
           type: integer
           format: int64
-        k8sResourceVer:
-          type: string
-        k8sResourceKind:
-          type: string
-        k8sResourceName:
-          type: string
-        k8sResourceScope:
-          type: string
     ErrorResponse:
       type: object
       properties:

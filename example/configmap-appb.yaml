@@ -6,5 +6,6 @@ metadata:
   labels:
     config.upm.io/managed: "true"
 data:
-  app: appB
-  version: "3dfsdfsd0"
+  value: |
+    app: appB
+    version: "3dfsdfsd0"

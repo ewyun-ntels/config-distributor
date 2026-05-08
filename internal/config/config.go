@@ -44,12 +44,6 @@ type ReconcilerConfig struct {
 	IntervalSeconds int  `yaml:"intervalSeconds"`
 }
 
-func (c *ReconcilerConfig) UnmarshalYAML(value *yaml.Node) error {
-	type raw ReconcilerConfig
-	*c = ReconcilerConfig{Enabled: true}
-	return value.Decode((*raw)(c))
-}
-
 type FilterConfig struct {
 	ManagedLabel ManagedLabelConfig `yaml:"managedLabel"`
 }

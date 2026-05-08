@@ -95,10 +95,18 @@ func (r *Reconciler) runOnce(ctx context.Context, kubeClient *kube.Client) {
 
 		action, err := kubeClient.UpsertConfigMapSingleKey(ctx, namespace, name, string(entry.Value()))
 		if err != nil {
-			hasError = true
 			if action != "" {
 				r.recordAction(namespace, string(action), resultError)
 			}
+			if action == kube.ConfigMapActionConflict {
+				slog.Warn("reconciler skipped unmanaged configmap conflict",
+					"namespace", namespace,
+					"name", name,
+					"err", err,
+				)
+				continue
+			}
+			hasError = true
 			slog.Error("reconciler upsert configmap failed",
 				"namespace", namespace,
 				"name", name,

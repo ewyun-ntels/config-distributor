@@ -20,9 +20,10 @@ const ConfigMapValueKey = "value"
 type ConfigMapUpsertAction string
 
 const (
-	ConfigMapActionCreate ConfigMapUpsertAction = "create"
-	ConfigMapActionUpdate ConfigMapUpsertAction = "update"
-	ConfigMapActionNoop   ConfigMapUpsertAction = "noop"
+	ConfigMapActionCreate   ConfigMapUpsertAction = "create"
+	ConfigMapActionUpdate   ConfigMapUpsertAction = "update"
+	ConfigMapActionNoop     ConfigMapUpsertAction = "noop"
+	ConfigMapActionConflict ConfigMapUpsertAction = "conflict"
 )
 
 type Client struct {
@@ -92,7 +93,7 @@ func (c *Client) UpsertConfigMapSingleKey(ctx context.Context, namespace, name, 
 	}
 
 	if !c.hasManagedLabel(&cm.ObjectMeta) {
-		return ConfigMapActionUpdate, fmt.Errorf("configmap %s/%s exists without managed label", namespace, name)
+		return ConfigMapActionConflict, fmt.Errorf("configmap %s/%s exists without managed label", namespace, name)
 	}
 
 	if hasSingleValue(cm.Data, value) {
@@ -103,13 +104,6 @@ func (c *Client) UpsertConfigMapSingleKey(ctx context.Context, namespace, name, 
 	c.ensureManagedLabels(&cm.ObjectMeta)
 	_, err = c.cs.CoreV1().ConfigMaps(namespace).Update(ctx, cm, metav1.UpdateOptions{})
 	return ConfigMapActionUpdate, err
-}
-
-func (c *Client) IsManagedConfigMap(cm *corev1.ConfigMap) bool {
-	if cm == nil {
-		return false
-	}
-	return c.hasManagedLabel(&cm.ObjectMeta)
 }
 
 func (c *Client) hasManagedLabel(meta *metav1.ObjectMeta) bool {
