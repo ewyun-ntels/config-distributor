@@ -13,7 +13,7 @@
 - Distributor는 시작 시 Kubernetes informer cache를 동기화한 뒤 현재 최종 상태로 KV를 reconcile하고, 이후 변경은 watch로 계속 반영
 
 메트릭
-- `/metrics`에서 Kubernetes 이벤트 처리와 KV 작업 결과를 Prometheus 텍스트 포맷으로 노출
+- `/metrics`에서 KV 작업 결과를 Prometheus 텍스트 포맷으로 노출
 
 요구 사항
 - JetStream 활성화된 NATS 서버

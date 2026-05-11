@@ -112,7 +112,7 @@ bootstrap 대상 ConfigMap은 **`data`에 단일 키만** 가져야 합니다.
 
 ## 메트릭
 
-- `/metrics`에서 REST API 요청 처리, KV 작업, 부트스트랩 결과, reconciler 실행 결과를 Prometheus 텍스트 포맷으로 노출
+- `/metrics`에서 KV 작업, 부트스트랩 결과, reconciler 실행 결과를 Prometheus 텍스트 포맷으로 노출
 
 ## 요구 사항
 
@@ -349,7 +349,6 @@ filter:
 
 ### 2-7. 메트릭 정리
 [internal/apiserver/apiserver.go](internal/apiserver/apiserver.go), [internal/metrics/metrics.go](internal/metrics/metrics.go):
-- `cfg_distributor_kube_events_total` 제거 (K8s 이벤트 없음)
 - `cfg_distributor_kv_operations_total`은 유지하되 `resource` 라벨에서 `secret` 제거
 - 신설 (counter만, gauge는 1차 미포함):
   - `cfg_distributor_bootstrap_seeded_total{namespace,result}`
